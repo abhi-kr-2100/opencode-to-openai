@@ -26,7 +26,7 @@ afterEach(() => {
  */
 export function startServer(options: StartServerOptions = {}): TestServer {
   const router = buildRouter(options.chatCompletions);
-  const server = createServer({ host: "127.0.0.1", port: 0 }, router);
+  const server = createServer({ host: "127.0.0.1", port: 0, opencodeUrl: "http://localhost:4096" }, router);
   const testServer: TestServer = {
     baseUrl: `http://127.0.0.1:${server.port}`,
     stop: () => server.stop(),
