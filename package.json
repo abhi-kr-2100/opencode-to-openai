@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@opencode-ai/sdk": "^1.18.11"
   },
   "devDependencies": {
     "@types/bun": "latest",

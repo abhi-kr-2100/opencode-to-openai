@@ -67,6 +67,12 @@ export class NotImplementedError extends ApiError {
   }
 }
 
+export class BadGatewayError extends ApiError {
+  constructor(message: string, options: ApiErrorOptions = {}) {
+    super(502, message, { type: "server_error", code: "bad_gateway", ...options });
+  }
+}
+
 export function toErrorBody(error: ApiError): ErrorBody {
   return {
     error: {
