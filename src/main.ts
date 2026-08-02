@@ -1,8 +1,9 @@
 import { buildRouter } from "./app.ts";
-import { displayAddress, loadConfig } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import { createOpencodeHttpClient } from "./opencode/client.ts";
 import { createServer } from "./server.ts";
 import { OpencodeChatCompletionsService } from "./services/opencode-chat-completions.ts";
+import { displayAddress } from "./utils/net.ts";
 
 const config = loadConfig();
 

@@ -30,15 +30,32 @@ interface OpencodeModel {
   modelID: string;
 }
 
-export function parseModel(model: string): OpencodeModel | undefined {
+/**
+ * Splits a model id into the provider/model pair opencode expects.
+ *
+ * The id must contain exactly one slash with non-empty parts on both sides;
+ * anything else is rejected rather than guessed.
+ */
+export function parseModel(model: string): OpencodeModel {
   const separator = model.indexOf("/");
-  if (separator <= 0 || separator === model.length - 1) return undefined;
+  if (separator <= 0 || separator === model.length - 1) {
+    throw new BadRequestError(
+      `invalid model "${model}": expected a "provider/model" pair, e.g. "anthropic/claude-3-5-sonnet-20241022"`,
+    );
+  }
   return {
     providerID: model.slice(0, separator),
     modelID: model.slice(separator + 1),
   };
 }
 
+/**
+ * Flattens OpenAI message content into the opencode part input format.
+ *
+ * String content becomes a single text part; array content is mapped
+ * part-by-part, with text parts passing through and image URLs becoming file
+ * parts. Malformed or unsupported entries are rejected rather than dropped.
+ */
 export function toParts(messages: ChatCompletionMessage[]): Array<TextPartInput | FilePartInput> {
   const parts: Array<TextPartInput | FilePartInput> = [];
   for (const message of messages) {
@@ -48,20 +65,32 @@ export function toParts(messages: ChatCompletionMessage[]): Array<TextPartInput 
     }
     if (Array.isArray(message.content)) {
       for (const contentPart of message.content) {
-        if (!isRecord(contentPart)) continue;
-        const type = contentPart.type;
-        if (type === "text" && typeof contentPart.text === "string") {
-          parts.push({ type: "text", text: contentPart.text });
-        } else if (
-          type === "image_url" &&
-          isRecord(contentPart.image_url) &&
-          typeof contentPart.image_url.url === "string"
-        ) {
-          parts.push({
-            type: "file",
-            mime: mimeFromUrl(contentPart.image_url.url),
-            url: contentPart.image_url.url,
-          });
+        if (!isRecord(contentPart)) {
+          throw new BadRequestError("message content parts must be objects");
+        }
+        switch (contentPart.type) {
+          // Text parts pass through as-is.
+          case "text":
+            if (typeof contentPart.text !== "string") {
+              throw new BadRequestError('text content parts must have a string "text" field');
+            }
+            if (contentPart.text.length > 0) parts.push({ type: "text", text: contentPart.text });
+            break;
+          // OpenAI image URLs become opencode file parts.
+          case "image_url":
+            if (!isRecord(contentPart.image_url) || typeof contentPart.image_url.url !== "string") {
+              throw new BadRequestError('image_url content parts must have a string "url" field');
+            }
+            parts.push({
+              type: "file",
+              mime: mimeFromUrl(contentPart.image_url.url),
+              url: contentPart.image_url.url,
+            });
+            break;
+          default:
+            throw new BadRequestError(
+              `unsupported content part type ${JSON.stringify(contentPart.type)}`,
+            );
         }
       }
     }
@@ -123,6 +152,7 @@ export function toPrompt(messages: ChatCompletionMessage[]): PromptInput {
   };
 }
 
+/** Extracts the text content of a message, joining array text parts with newlines. */
 function contentText(message: ChatCompletionMessage): string | undefined {
   if (typeof message.content === "string") return message.content;
   if (Array.isArray(message.content)) {
@@ -141,6 +171,12 @@ function contentText(message: ChatCompletionMessage): string | undefined {
   return undefined;
 }
 
+/**
+ * Converts opencode token counters into OpenAI usage accounting.
+ *
+ * Prompt tokens count input plus all cache reads and writes; completion
+ * tokens count output plus reasoning.
+ */
 export function toUsage(info: AssistantMessage): ChatCompletionUsage {
   const { input, output, reasoning, cache } = info.tokens;
   const promptTokens = input + cache.read + cache.write;
@@ -152,6 +188,7 @@ export function toUsage(info: AssistantMessage): ChatCompletionUsage {
   };
 }
 
+/** Maps an opencode finish reason onto the OpenAI vocabulary. */
 export function mapFinishReason(finish: string | undefined): ChatCompletionFinishReason {
   switch (finish) {
     case "max_tokens":
@@ -163,6 +200,12 @@ export function mapFinishReason(finish: string | undefined): ChatCompletionFinis
   }
 }
 
+/**
+ * Assembles a non-streaming OpenAI chat completion from an opencode session.
+ *
+ * Only text parts contribute to the assistant message; reasoning and other
+ * part kinds are excluded from the visible content.
+ */
 export function buildCompletion(
   request: ChatCompletionRequest,
   info: AssistantMessage,
@@ -189,6 +232,12 @@ export function buildCompletion(
   };
 }
 
+/**
+ * Translates an error from the opencode client into an HTTP ApiError.
+ *
+ * Handles SDK error envelopes, transport failures (mapped to 502), and named
+ * error objects; anything unrecognized falls back to a 500.
+ */
 export function mapOpencodeError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
   if (error instanceof Error) {
@@ -214,6 +263,7 @@ export function mapOpencodeError(error: unknown): ApiError {
   return new InternalServerError("an error occurred while talking to the opencode server");
 }
 
+/** Maps a session-level failure to a 502, falling back to a generic message. */
 function mapSessionError(error: unknown): ApiError {
   const message = isRecord(error) ? messageOf(error.data) : undefined;
   return new BadGatewayError(message ?? "the opencode session failed");
@@ -363,6 +413,12 @@ function chunkBase(
   };
 }
 
+/**
+ * Computes the content delta for a part update.
+ *
+ * Prefers the event's delta when provided; otherwise diffs the part's new
+ * text against what has already been emitted for it.
+ */
 function textDelta(part: TextPart, delta: string | undefined, seen: Map<string, string>): string {
   const previous = seen.get(part.id) ?? "";
   seen.set(part.id, part.text);
@@ -370,6 +426,7 @@ function textDelta(part: TextPart, delta: string | undefined, seen: Map<string, 
   return part.text.slice(previous.length);
 }
 
+/** Extracts the session id an event belongs to, if the event carries one. */
 function sessionIDOf(event: Event): string | undefined {
   switch (event.type) {
     case "message.part.updated":
@@ -381,15 +438,18 @@ function sessionIDOf(event: Event): string | undefined {
   }
 }
 
+/** Type guard for plain (non-array) objects. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Reads the `message` field of an error payload, if present. */
 function messageOf(value: unknown): string | undefined {
   if (isRecord(value) && typeof value.message === "string") return value.message;
   return undefined;
 }
 
+/** Returns the MIME type of a data URL, falling back to octet-stream for plain URLs. */
 function mimeFromUrl(url: string): string {
   const data = /^data:([^;,]+)/.exec(url);
   if (data?.[1]) return data[1];

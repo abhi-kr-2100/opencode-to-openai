@@ -148,10 +148,10 @@ describe("parseModel", () => {
     });
   });
 
-  test("returns undefined for providerless or malformed models", () => {
-    expect(parseModel("gpt-4o")).toBeUndefined();
-    expect(parseModel("/model")).toBeUndefined();
-    expect(parseModel("provider/")).toBeUndefined();
+  test("throws for providerless or malformed models", () => {
+    expect(() => parseModel("gpt-4o")).toThrow(BadRequestError);
+    expect(() => parseModel("/model")).toThrow(BadRequestError);
+    expect(() => parseModel("provider/")).toThrow(BadRequestError);
   });
 });
 
@@ -195,23 +195,20 @@ describe("toParts", () => {
     ]);
   });
 
-  test("skips malformed content parts", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          "bogus",
-          null,
-          { type: "unknown", text: "wat" },
-          { type: "image_url", image_url: "not-an-object" },
-          { type: "image_url", image_url: { url: 123 } },
-          { type: "text", text: "kept" },
-        ],
-      },
+  test("rejects malformed content parts", () => {
+    const content = [
+      "bogus",
+      null,
+      { type: "unknown", text: "wat" },
+      { type: "image_url", image_url: "not-an-object" },
+      { type: "image_url", image_url: { url: 123 } },
     ];
-    expect(toParts(messages as unknown as ChatCompletionMessage[])).toEqual([
-      { type: "text", text: "kept" },
-    ]);
+    for (const part of content) {
+      const messages = [{ role: "user", content: [part] }];
+      expect(() => toParts(messages as unknown as ChatCompletionMessage[])).toThrow(
+        BadRequestError,
+      );
+    }
   });
 });
 
