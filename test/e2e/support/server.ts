@@ -9,7 +9,7 @@ export interface TestServer {
 }
 
 export interface StartServerOptions {
-  chatCompletions?: ChatCompletionsService;
+  chatCompletions: ChatCompletionsService;
 }
 
 const runningServers: TestServer[] = [];
@@ -24,9 +24,12 @@ afterEach(() => {
  * Boots the real application stack (Bun.serve + Router + handlers) on an
  * ephemeral port and registers it for automatic shutdown after each test.
  */
-export function startServer(options: StartServerOptions = {}): TestServer {
+export function startServer(options: StartServerOptions): TestServer {
   const router = buildRouter(options.chatCompletions);
-  const server = createServer({ host: "127.0.0.1", port: 0, opencodeUrl: "http://localhost:4096" }, router);
+  const server = createServer(
+    { host: "127.0.0.1", port: 0, opencodeUrl: "http://localhost:4096" },
+    router,
+  );
   const testServer: TestServer = {
     baseUrl: `http://127.0.0.1:${server.port}`,
     stop: () => server.stop(),

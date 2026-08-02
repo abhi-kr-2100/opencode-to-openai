@@ -13,9 +13,12 @@ export function chatCompletionsHandler(service: ChatCompletionsService): RouteHa
       throw new BadRequestError(formatValidationError(parsed.error.issues));
     }
 
+    if (parsed.data.stream) {
+      server.timeout(request, 0);
+    }
+
     const result = await service.create(parsed.data);
     if (result.stream) {
-      server.timeout(request, 0);
       return sseResponse(streamWithDone(result.value));
     }
     return sendJson(200, result.value);
