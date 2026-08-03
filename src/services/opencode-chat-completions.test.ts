@@ -21,6 +21,9 @@ import {
   mapOpencodeError,
   OpencodeChatCompletionsService,
   parseModel,
+  renderToolSection,
+  splitToolCalls,
+  ToolCallSplitter,
   toParts,
   toPrompt,
   toUsage,
@@ -138,6 +141,18 @@ function completionRequest(stream: boolean): ChatCompletionRequest {
     messages: [{ role: "user", content: "hi" }],
     stream,
   };
+}
+
+/** Runs a sequence of deltas through a fresh splitter, tagging each output. */
+function split(deltas: string[]): string[] {
+  const splitter = new ToolCallSplitter();
+  const outputs: string[] = [];
+  for (const delta of deltas) {
+    for (const output of splitter.push(delta)) {
+      outputs.push(output.kind === "text" ? `text:${output.text}` : `call:${output.payload}`);
+    }
+  }
+  return outputs;
 }
 
 describe("parseModel", () => {
@@ -315,7 +330,7 @@ describe("toPrompt", () => {
         {
           type: "text",
           text:
-            'user: weather?\n\ntool_call (t1): get_weather({"city":"SF"})\n\n' +
+            'user: weather?\n\n<tool_call>\n{"name":"get_weather","arguments":"{\\"city\\":\\"SF\\"}","id":"t1"}\n</tool_call>\n\n' +
             'tool (t1): {"temp":"72F"}',
         },
         { type: "text", text: "thanks" },
@@ -342,17 +357,31 @@ describe("toPrompt", () => {
     });
   });
 
-  test("rejects a request whose last message is not a user message", () => {
+  test("allows a follow-up turn ending on a tool result", () => {
     const messages = [
-      { role: "user", content: "hi" },
-      { role: "assistant", content: "hello" },
+      { role: "user", content: "weather?" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "t1",
+            type: "function",
+            function: { name: "get_weather", arguments: '{"city":"SF"}' },
+          },
+        ],
+      },
+      { role: "tool", content: '{"temp":"72F"}', tool_call_id: "t1" },
     ];
-    expect(() => toPrompt(messages as ChatCompletionMessage[])).toThrow(
-      expect.objectContaining({
-        status: 400,
-        message: expect.stringContaining("last message must be a user"),
-      }),
-    );
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      parts: [
+        {
+          type: "text",
+          text: 'user: weather?\n\n<tool_call>\n{"name":"get_weather","arguments":"{\\"city\\":\\"SF\\"}","id":"t1"}\n</tool_call>',
+        },
+        { type: "text", text: '{"temp":"72F"}' },
+      ],
+    });
   });
 
   test("rejects a system message after the user message", () => {
@@ -373,6 +402,266 @@ describe("toPrompt", () => {
         message: expect.stringContaining("user message is required"),
       }),
     );
+  });
+
+  test("appends tool instructions to the system prompt", () => {
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "get_weather",
+          description: "Get the current weather for a city.",
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+          },
+        },
+      },
+    ];
+    const prompt = toPrompt([{ role: "user", content: "hi" }], { tools });
+    const system = prompt.system ?? "";
+    expect(system).toContain("name: get_weather");
+    expect(system).toContain("description: Get the current weather for a city.");
+    expect(system).toContain('"city"');
+    expect(system).toContain("<tool_call>");
+  });
+
+  test("appends tool instructions after leading system messages", () => {
+    const tools = [{ type: "function", function: { name: "ping" } }];
+    const prompt = toPrompt(
+      [
+        { role: "system", content: "be terse" },
+        { role: "user", content: "hi" },
+      ],
+      { tools },
+    );
+    expect(prompt.system).toBe(`be terse\n\n${renderToolSection(tools, undefined)}`);
+  });
+
+  test("forbids tools when tool_choice is none", () => {
+    const tools = [{ type: "function", function: { name: "ping" } }];
+    const prompt = toPrompt([{ role: "user", content: "hi" }], { tools, toolChoice: "none" });
+    expect(prompt.system).toContain("Do not use any custom userspace tools in this conversation.");
+  });
+
+  test("requires a tool when tool_choice is required", () => {
+    const tools = [{ type: "function", function: { name: "ping" } }];
+    const prompt = toPrompt([{ role: "user", content: "hi" }], {
+      tools,
+      toolChoice: "required",
+    });
+    expect(prompt.system).toContain(
+      "You must use at least one custom userspace tool in this conversation.",
+    );
+  });
+
+  test("requires a named tool when tool_choice names one", () => {
+    const tools = [
+      { type: "function", function: { name: "ping" } },
+      { type: "function", function: { name: "pong" } },
+    ];
+    const prompt = toPrompt([{ role: "user", content: "hi" }], {
+      tools,
+      toolChoice: { type: "function", function: { name: "pong" } },
+    });
+    expect(prompt.system).toContain(
+      'You must use the "pong" custom userspace tool in this conversation.',
+    );
+  });
+
+  test("rejects tool_choice naming an unknown tool", () => {
+    const tools = [{ type: "function", function: { name: "ping" } }];
+    expect(() =>
+      toPrompt([{ role: "user", content: "hi" }], {
+        tools,
+        toolChoice: { type: "function", function: { name: "nope" } },
+      }),
+    ).toThrow(
+      expect.objectContaining({ status: 400, message: expect.stringContaining("unknown tool") }),
+    );
+  });
+
+  test("rejects malformed tool definitions", () => {
+    for (const tools of [
+      [42],
+      [{ type: "other" }],
+      [{ type: "function", function: {} }],
+      [{ type: "function", function: { name: "" } }],
+    ]) {
+      expect(() => toPrompt([{ role: "user", content: "hi" }], { tools })).toThrow(
+        expect.objectContaining({ status: 400 }),
+      );
+    }
+  });
+
+  test("ignores tools that are empty or not arrays", () => {
+    expect(toPrompt([{ role: "user", content: "hi" }], { tools: [] }).system).toBeUndefined();
+    expect(toPrompt([{ role: "user", content: "hi" }], { tools: "bogus" }).system).toBeUndefined();
+  });
+
+  test("rejects tool_choice without tools", () => {
+    expect(() => toPrompt([{ role: "user", content: "hi" }], { toolChoice: "none" })).toThrow(
+      expect.objectContaining({
+        status: 400,
+        message: expect.stringContaining("tool_choice requires at least one tool"),
+      }),
+    );
+    expect(
+      toPrompt([{ role: "user", content: "hi" }], { toolChoice: "auto" }).system,
+    ).toBeUndefined();
+  });
+});
+
+describe("renderToolSection", () => {
+  test("renders undefined without tools", () => {
+    expect(renderToolSection(undefined, undefined)).toBeUndefined();
+    expect(renderToolSection([], "auto")).toBeUndefined();
+  });
+
+  test("renders a named tool with description and schema", () => {
+    const section = renderToolSection(
+      [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Current weather.",
+            parameters: { type: "object", properties: { city: { type: "string" } } },
+          },
+        },
+      ],
+      undefined,
+    );
+    expect(section).toContain("- name: get_weather");
+    expect(section).toContain("  description: Current weather.");
+    expect(section).toContain("  arguments (JSON object):");
+    expect(section).toContain('{"type":"object","properties":{"city":{"type":"string"}}}');
+  });
+
+  test("renders multiple tools as separate bullets", () => {
+    const section = renderToolSection(
+      [
+        { type: "function", function: { name: "a" } },
+        { type: "function", function: { name: "b" } },
+      ],
+      undefined,
+    );
+    expect(section).toContain("- name: a");
+    expect(section).toContain("- name: b");
+  });
+});
+
+describe("splitToolCalls", () => {
+  test("returns plain text unchanged", () => {
+    expect(splitToolCalls("hello world")).toEqual({ content: "hello world", calls: [] });
+  });
+
+  test("extracts a single tool call and strips it from content", () => {
+    expect(
+      splitToolCalls(
+        'Let me check.\n<tool_call>{"name":"get_weather","arguments":{"city":"SF"}}</tool_call>',
+      ),
+    ).toEqual({
+      content: "Let me check.\n",
+      calls: [{ name: "get_weather", arguments: '{"city":"SF"}' }],
+    });
+  });
+
+  test("extracts multiple tool calls in order", () => {
+    const { content, calls } = splitToolCalls(
+      '<tool_call>{"name":"a","arguments":{"x":1}}</tool_call> and ' +
+        '<tool_call>{"name":"b","arguments":{"y":2}}</tool_call>',
+    );
+    expect(content).toBe(" and ");
+    expect(calls).toEqual([
+      { name: "a", arguments: '{"x":1}' },
+      { name: "b", arguments: '{"y":2}' },
+    ]);
+  });
+
+  test("accepts arguments as a JSON string", () => {
+    const { content, calls } = splitToolCalls(
+      '<tool_call>{"name":"a","arguments":"{\\"x\\":1}"}</tool_call>',
+    );
+    expect(content).toBe("");
+    expect(calls).toEqual([{ name: "a", arguments: '{"x":1}' }]);
+  });
+
+  test("keeps malformed blocks in the content", () => {
+    expect(splitToolCalls("hi <tool_call>oops}</tool_call> bye")).toEqual({
+      content: "hi <tool_call>oops}</tool_call> bye",
+      calls: [],
+    });
+  });
+
+  test("leaves unclosed blocks in the content", () => {
+    expect(splitToolCalls('hi <tool_call>{"name":"a","arguments":{"x":1}}')).toEqual({
+      content: 'hi <tool_call>{"name":"a","arguments":{"x":1}}',
+      calls: [],
+    });
+  });
+});
+
+describe("ToolCallSplitter", () => {
+  test("passes text through", () => {
+    expect(split(["Hel", "lo world"])).toEqual(["text:Hel", "text:lo world"]);
+  });
+
+  test("parses a block split across arbitrary chunk boundaries", () => {
+    expect(
+      split([
+        "Sure, <tool_call>",
+        '{"name":"get_weather","arguments":{"city":"SF"}}',
+        "</tool_call>",
+        " done",
+      ]),
+    ).toEqual([
+      "text:Sure, ",
+      'call:{"name":"get_weather","arguments":{"city":"SF"}}',
+      "text: done",
+    ]);
+  });
+
+  test("parses multiple blocks and interleaved text", () => {
+    expect(
+      split([
+        '<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>',
+        ' and <tool_call>{"name":"b","arguments":{"y":2}}</tool_call>',
+      ]),
+    ).toEqual([
+      'call:{"name":"a","arguments":{"x":1}}',
+      "text: and ",
+      'call:{"name":"b","arguments":{"y":2}}',
+    ]);
+  });
+
+  test("holds a literal tag-looking prefix and flushes it when it diverges", () => {
+    const outputs = split(["text <tool_call nope", ", really"]);
+    expect(outputs.filter((output) => output.startsWith("call:"))).toEqual([]);
+    expect(outputs.map((output) => output.slice("text:".length)).join("")).toBe(
+      "text <tool_call nope, really",
+    );
+  });
+
+  test("holds a partial opening tag until the tag completes", () => {
+    expect(
+      split(["a <tool", "_call", ">", '{"name":"x","arguments":{"n":1}}', "</tool_call>", " b"]),
+    ).toEqual(["text:a ", 'call:{"name":"x","arguments":{"n":1}}', "text: b"]);
+  });
+
+  test("flushes an unclosed block as text", () => {
+    const splitter = new ToolCallSplitter();
+    expect(splitter.push('<tool_call>{"name":"a","arguments":{"x":1}}')).toEqual([]);
+    expect(splitter.flush()).toEqual([
+      { kind: "text", text: '<tool_call>{"name":"a","arguments":{"x":1}}' },
+    ]);
+  });
+
+  test("flushes trailing held text", () => {
+    const splitter = new ToolCallSplitter();
+    expect(splitter.push("hello <tool_c")).toEqual([{ kind: "text", text: "hello " }]);
+    expect(splitter.flush()).toEqual([{ kind: "text", text: "<tool_c" }]);
   });
 });
 
@@ -418,6 +707,45 @@ describe("buildCompletion", () => {
     expect(completion.choices[0]?.finish_reason).toBe("stop");
     expect(completion.choices[0]?.logprobs).toBeNull();
     expect(completion.usage).toEqual({ prompt_tokens: 14, completion_tokens: 7, total_tokens: 21 });
+  });
+
+  test("surfaces emulated tool calls with finish_reason tool_calls", () => {
+    const request = { model: "anthropic/claude-3-5-sonnet-20241022", stream: false, messages: [] };
+    const parts: Part[] = [
+      {
+        type: "text",
+        id: "p1",
+        sessionID: "s",
+        messageID: "m",
+        text: '<tool_call>{"name":"get_weather","arguments":{"city":"SF"}}</tool_call>',
+      },
+    ];
+    const completion = buildCompletion(request, assistantInfo({ finish: "end_turn" }), parts);
+    const message = completion.choices[0]!.message;
+    expect(message.content).toBeNull();
+    expect(message.tool_calls).toHaveLength(1);
+    const call = message.tool_calls?.[0];
+    expect(call?.type).toBe("function");
+    expect(call?.id.startsWith("call_")).toBe(true);
+    expect(call?.function).toEqual({ name: "get_weather", arguments: '{"city":"SF"}' });
+    expect(completion.choices[0]?.finish_reason).toBe("tool_calls");
+  });
+
+  test("keeps preamble text next to emulated tool calls", () => {
+    const request = { model: "anthropic/claude-3-5-sonnet-20241022", stream: false, messages: [] };
+    const parts: Part[] = [
+      {
+        type: "text",
+        id: "p1",
+        sessionID: "s",
+        messageID: "m",
+        text: 'Checking now. <tool_call>{"name":"ping","arguments":{"n":1}}</tool_call>',
+      },
+    ];
+    const completion = buildCompletion(request, assistantInfo(), parts);
+    expect(completion.choices[0]?.message.content).toBe("Checking now. ");
+    expect(completion.choices[0]?.message.tool_calls).toHaveLength(1);
+    expect(completion.choices[0]?.finish_reason).toBe("tool_calls");
   });
 });
 
@@ -721,6 +1049,43 @@ describe("OpencodeChatCompletionsService (stream)", () => {
     expect(chunks[2]?.choices[0]?.delta.content).toBe(" world");
   });
 
+  test("strips tool call markup and streams tool call deltas", async () => {
+    const chunks = await collect([
+      textPart("Sure, <tool_c"),
+      textPart("all>"),
+      textPart('{"name":"get_weather","arguments":{"city": "SF"}}'),
+      textPart("</tool_call> done"),
+      updated(assistantInfo({ finish: "end_turn" })),
+      idle(),
+    ]);
+
+    const deltas = chunks.map((chunk) => chunk.choices[0]?.delta);
+    expect(deltas).toEqual([
+      { role: "assistant", content: "" },
+      { content: "Sure, " },
+      {
+        tool_calls: [
+          {
+            index: 0,
+            id: expect.stringMatching(/^call_/),
+            type: "function",
+            function: { name: "get_weather", arguments: '{"city":"SF"}' },
+          },
+        ],
+      },
+      { content: " done" },
+      {},
+    ]);
+    const finish = chunks.at(-1)?.choices[0];
+    expect(finish?.finish_reason).toBe("tool_calls");
+    expect(finish?.delta).toEqual({});
+  });
+
+  test("emits a plain stop finish when no tool calls were made", async () => {
+    const chunks = await collect([textPart("hi"), updated(assistantInfo()), idle()]);
+    expect(chunks.at(-1)?.choices[0]?.finish_reason).toBe("stop");
+  });
+
   test("skips events from other sessions and non-text parts", async () => {
     const foreign = textPart("ignored", "part-x", "other-session");
     const reasoning = partEvent({
@@ -747,6 +1112,19 @@ describe("OpencodeChatCompletionsService (stream)", () => {
 
     expect(chunks).toHaveLength(2);
     expect(chunks[1]?.choices[0]?.delta.content).toBe("kept");
+  });
+
+  test("flushes a held-back partial tag when the message completes", async () => {
+    const chunks = await collect([
+      textPart("kept <tool_c"),
+      updated(assistantInfo({ finish: "end_turn" })),
+      idle(),
+    ]);
+
+    expect(chunks).toHaveLength(4);
+    expect(chunks[1]?.choices[0]?.delta.content).toBe("kept ");
+    expect(chunks[2]?.choices[0]?.delta.content).toBe("<tool_c");
+    expect(chunks[3]?.choices[0]?.finish_reason).toBe("stop");
   });
 
   test("emits a usage chunk when include_usage is set", async () => {
