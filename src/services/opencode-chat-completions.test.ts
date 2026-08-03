@@ -279,40 +279,78 @@ describe("toPrompt", () => {
     });
   });
 
-  test("rejects assistant messages instead of flattening them", () => {
+  test("flattens assistant turns into the transcript", () => {
     const messages = [
       { role: "user", content: "hi" },
       { role: "assistant", content: "hello" },
       { role: "user", content: "again" },
     ];
-    expect(() => toPrompt(messages as ChatCompletionMessage[])).toThrow(
-      expect.objectContaining({
-        status: 400,
-        message: expect.stringContaining("assistant"),
-      }),
-    );
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      parts: [
+        { type: "text", text: "user: hi\n\nassistant: hello" },
+        { type: "text", text: "again" },
+      ],
+    });
   });
 
-  test("rejects tool messages", () => {
+  test("flattens tool calls and results into the transcript", () => {
     const messages = [
-      { role: "user", content: "hi" },
-      { role: "assistant", content: null, tool_calls: [{ id: "t1" }] },
-      { role: "tool", content: "42", tool_call_id: "t1" },
+      { role: "user", content: "weather?" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "t1",
+            type: "function",
+            function: { name: "get_weather", arguments: '{"city":"SF"}' },
+          },
+        ],
+      },
+      { role: "tool", content: '{"temp":"72F"}', tool_call_id: "t1" },
+      { role: "user", content: "thanks" },
     ];
-    expect(() => toPrompt(messages as ChatCompletionMessage[])).toThrow(
-      expect.objectContaining({ status: 400, message: expect.stringContaining("tool") }),
-    );
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      parts: [
+        {
+          type: "text",
+          text:
+            'user: weather?\n\ntool_call (t1): get_weather({"city":"SF"})\n\n' +
+            'tool (t1): {"temp":"72F"}',
+        },
+        { type: "text", text: "thanks" },
+      ],
+    });
   });
 
-  test("rejects multiple user messages", () => {
+  test("allows multiple user messages as transcript turns", () => {
     const messages = [
       { role: "user", content: "first" },
       { role: "user", content: "second" },
     ];
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      parts: [
+        { type: "text", text: "user: first" },
+        { type: "text", text: "second" },
+      ],
+    });
+  });
+
+  test("omits the transcript for a single user message", () => {
+    expect(toPrompt([{ role: "user", content: "hi" }])).toEqual({
+      parts: [{ type: "text", text: "hi" }],
+    });
+  });
+
+  test("rejects a request whose last message is not a user message", () => {
+    const messages = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+    ];
     expect(() => toPrompt(messages as ChatCompletionMessage[])).toThrow(
       expect.objectContaining({
         status: 400,
-        message: expect.stringContaining("multi-turn"),
+        message: expect.stringContaining("last message must be a user"),
       }),
     );
   });
@@ -517,23 +555,37 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     });
   });
 
-  test("rejects unsupported history before creating a session", async () => {
+  test("flattens replayed history into the prompt", async () => {
     const client = fakeClient({
-      create: { error: new Error("session creation should never be attempted") },
+      create: { data: { id: "session-1" } },
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [{ type: "text", id: "p1", sessionID: "s", messageID: "m", text: "hello" }],
+        },
+      },
     });
     const service = new OpencodeChatCompletionsService(client);
 
-    await expect(
-      service.create({
-        model: "anthropic/claude-3-5-sonnet-20241022",
-        messages: [
-          { role: "user", content: "hi" },
-          { role: "assistant", content: "hello" },
-          { role: "user", content: "again" },
-        ],
-        stream: false,
-      }),
-    ).rejects.toBeInstanceOf(BadRequestError);
+    const result = await service.create({
+      model: "anthropic/claude-3-5-sonnet-20241022",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "hello" },
+        { role: "user", content: "again" },
+      ],
+      stream: false,
+    });
+
+    expect(client.calls[0]?.body).toEqual({
+      model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      parts: [
+        { type: "text", text: "user: hi\n\nassistant: hello" },
+        { type: "text", text: "again" },
+      ],
+    });
+    expect(client.deleted).toBe(true);
+    expect(result.stream).toBe(false);
   });
 
   test("maps a message error to a 502", async () => {
