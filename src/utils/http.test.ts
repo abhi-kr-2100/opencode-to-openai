@@ -14,7 +14,7 @@ describe("parseJsonBody", () => {
 
   test("throws BadRequestError for invalid JSON", async () => {
     const request = new Request("http://localhost/", { method: "POST", body: "nope" });
-    await expect(parseJsonBody(request)).rejects.toBeInstanceOf(BadRequestError);
+    expect(parseJsonBody(request)).rejects.toBeInstanceOf(BadRequestError);
   });
 });
 

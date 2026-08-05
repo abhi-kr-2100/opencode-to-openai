@@ -4,20 +4,17 @@ import type {
   ChatCompletionChunk,
   ChatCompletionRequest,
 } from "../../../openai/chat-completions.ts";
-import { Router, type TimeoutServer } from "../../../router.ts";
+import { Router, type TimeoutConfigurableServer } from "../../../router.ts";
 import type {
   ChatCompletionsService,
   ChatCompletionResult,
 } from "../../../services/chat-completions.ts";
-import { StubChatCompletionsService } from "../../../services/chat-completions.ts";
 import { chatCompletionsHandler } from "./completions.ts";
 
-const stubServer: TimeoutServer = { timeout: () => {} };
+const stubServer: TimeoutConfigurableServer = { timeout: () => {} };
 
 class FakeChatCompletionsService implements ChatCompletionsService {
-  constructor(
-    private readonly result: (request: ChatCompletionRequest) => ChatCompletionResult,
-  ) {}
+  constructor(private readonly result: (request: ChatCompletionRequest) => ChatCompletionResult) {}
 
   async create(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
     return this.result(request);
@@ -37,7 +34,11 @@ function createRouter(): Router {
   router.register(
     "POST",
     "/v1/chat/completions",
-    chatCompletionsHandler(new StubChatCompletionsService()),
+    chatCompletionsHandler(
+      new FakeChatCompletionsService(() => {
+        throw new Error("unreachable in validation tests");
+      }),
+    ),
   );
   return router;
 }
@@ -55,15 +56,6 @@ function postJson(body: unknown): Request {
 }
 
 describe("POST /v1/chat/completions", () => {
-  test("returns 501 until the backend is implemented", async () => {
-    const response = await handle(
-      postJson({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] }),
-    );
-    expect(response.status).toBe(501);
-    const body = await readError(response);
-    expect(body.error.code).toBe("not_implemented");
-  });
-
   test("returns 400 for an invalid JSON body", async () => {
     const request = new Request("http://localhost/v1/chat/completions", {
       method: "POST",
@@ -128,7 +120,7 @@ describe("POST /v1/chat/completions", () => {
 
   test("returns an SSE stream and disables the timeout for streaming requests", async () => {
     const timeouts: number[] = [];
-    const server: TimeoutServer = { timeout: (_request, seconds) => timeouts.push(seconds) };
+    const server: TimeoutConfigurableServer = { timeout: (_request, seconds) => timeouts.push(seconds) };
     const router = new Router();
     router.register(
       "POST",
