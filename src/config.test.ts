@@ -55,8 +55,6 @@ describe("loadConfig", () => {
   });
 
   test("throws for a non-http(s) OPENCODE_URL", () => {
-    expect(() => loadConfig({ OPENCODE_URL: "ftp://example.com" })).toThrow(
-      /invalid OPENCODE_URL/,
-    );
+    expect(() => loadConfig({ OPENCODE_URL: "ftp://example.com" })).toThrow(/invalid OPENCODE_URL/);
   });
 });

@@ -23,10 +23,10 @@ describe("e2e entrypoint", () => {
         stderr: "pipe",
       });
       try {
-      const log = await readLogUntil(proc.stdout, /using opencode server at http:\/\//, 10_000);
-      const match = /listening on http:\/\/([^:]+):(\d+)/.exec(log);
-      expect(match).not.toBeNull();
-      expect(log).toContain(`using opencode server at ${opencode.url}`);
+        const log = await readLogUntil(proc.stdout, /using opencode server at http:\/\//, 10_000);
+        const match = /listening on http:\/\/([^:]+):(\d+)/.exec(log);
+        expect(match).not.toBeNull();
+        expect(log).toContain(`using opencode server at ${opencode.url}`);
         const port = Number(match![2]);
         const response = await fetch(
           `http://127.0.0.1:${port}/v1/chat/completions`,

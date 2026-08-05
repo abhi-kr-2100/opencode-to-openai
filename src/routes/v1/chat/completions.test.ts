@@ -15,9 +15,7 @@ import { chatCompletionsHandler } from "./completions.ts";
 const stubServer: TimeoutServer = { timeout: () => {} };
 
 class FakeChatCompletionsService implements ChatCompletionsService {
-  constructor(
-    private readonly result: (request: ChatCompletionRequest) => ChatCompletionResult,
-  ) {}
+  constructor(private readonly result: (request: ChatCompletionRequest) => ChatCompletionResult) {}
 
   async create(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
     return this.result(request);

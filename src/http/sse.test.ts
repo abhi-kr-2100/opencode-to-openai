@@ -42,7 +42,7 @@ function pendingSource(): {
     source: {
       [Symbol.asyncIterator]() {
         const id = nextId++;
-        let release: () => void = () => {};
+        let release!: () => void;
         const closed = new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -97,9 +97,7 @@ describe("encodeSseEvent", () => {
   });
 
   test("does not let blank lines terminate the event early", () => {
-    expect(encodeSseEvent("line1\n\nline2")).toBe(
-      "data: line1\ndata: \ndata: line2\n\n",
-    );
+    expect(encodeSseEvent("line1\n\nline2")).toBe("data: line1\ndata: \ndata: line2\n\n");
   });
 
   test("stringifies non-strings as JSON", () => {
