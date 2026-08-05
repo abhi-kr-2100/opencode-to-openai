@@ -10,7 +10,7 @@ export async function parseJsonBody(request: Request): Promise<unknown> {
   }
 }
 
-export function formatValidationError(issues: z.ZodIssue[]): string {
+export function formatValidationError(issues: z.core.$ZodIssue[]): string {
   return issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
 }
 

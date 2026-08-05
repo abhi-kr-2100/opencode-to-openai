@@ -1,10 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type {
-  ChatCompletion,
-  ChatCompletionChunk,
-} from "../../src/openai/chat-completions.ts";
+import type { ChatCompletion, ChatCompletionChunk } from "../../src/openai/chat-completions.ts";
 import { createOpencodeHttpClient } from "../../src/opencode/client.ts";
-import { OpencodeChatCompletionsService } from "../../src/services/opencode-chat-completions.ts";
+import { OpencodeChatCompletionsService } from "../../src/services/opencode/service.ts";
 import { E2E_MODEL, startOpencode, type TestOpencode } from "./support/opencode.ts";
 import { postJson } from "./support/requests.ts";
 import { startServer } from "./support/server.ts";
@@ -38,9 +35,7 @@ describe("e2e POST /v1/chat/completions (real opencode server)", () => {
 
   function proxyBaseUrl(): string {
     const proxy = startServer({
-      chatCompletions: new OpencodeChatCompletionsService(
-        createOpencodeHttpClient(opencode.url),
-      ),
+      chatCompletions: new OpencodeChatCompletionsService(createOpencodeHttpClient(opencode.url)),
     });
     return proxy.baseUrl;
   }
@@ -99,9 +94,7 @@ describe("e2e POST /v1/chat/completions (real opencode server)", () => {
     const deadUrl = `http://127.0.0.1:${dead.port}`;
     dead.stop();
     const baseUrl = startServer({
-      chatCompletions: new OpencodeChatCompletionsService(
-        createOpencodeHttpClient(deadUrl),
-      ),
+      chatCompletions: new OpencodeChatCompletionsService(createOpencodeHttpClient(deadUrl)),
     }).baseUrl;
 
     const response = await fetch(`${baseUrl}/v1/chat/completions`, completionBody());

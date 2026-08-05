@@ -1,12 +1,12 @@
 import { MethodNotAllowedError, NotFoundError, toErrorResponse } from "./http/errors.ts";
 
-export interface TimeoutServer {
+export interface TimeoutConfigurableServer {
   timeout(request: Request, seconds: number): void;
 }
 
 export type RouteHandler = (
   request: Request,
-  server: TimeoutServer,
+  server: TimeoutConfigurableServer,
 ) => Response | Promise<Response>;
 
 interface Route {
@@ -25,7 +25,7 @@ export class Router {
     this.#routes.push({ method: method.toUpperCase(), path, handler });
   }
 
-  async handle(request: Request, server: TimeoutServer): Promise<Response> {
+  async handle(request: Request, server: TimeoutConfigurableServer): Promise<Response> {
     const url = new URL(request.url);
     try {
       const route = this.#findRoute(request.method, url.pathname);
