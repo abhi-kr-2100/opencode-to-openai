@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenCode — Domain Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html"><span class="mark">G</span> Domain Guides</a>
+    <nav class="site">
+      <a href="index.html">Overview</a>
+      <a href="opencode.html" class="active">OpenCode</a>
+      <a href="openai-v1-api.html">OpenAI v1 API</a>
+      <a href="bridging.html">Bridging</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<h1>The OpenCode domain</h1>
+<p class="lead">
+  OpenCode is an open-source <em>AI coding agent</em>: a program that plans and performs software
+  engineering work in a project directory, driven by a conversational loop with a language model.
+</p>
+
+<h2>What OpenCode is</h2>
+<p>
+  OpenCode runs locally and presents a terminal UI (TUI), but the TUI is only a client. The real system is a
+  <strong>headless server</strong> that manages everything: conversation state, tool execution, permissions,
+  and model calls. The server exposes an HTTP API plus a server-sent events stream, and a type-safe JS SDK
+  (<code>@opencode-ai/sdk</code>) wraps it. Programmatic consumers never touch the TUI; they talk to the
+  server over HTTP and listen to its event stream.
+</p>
+<p>
+  The central data model — and the vocabulary you must master — is:
+  <strong>Project &rarr; Session &rarr; Message &rarr; Part</strong>, with a parallel
+  <strong>event stream</strong> that reports everything as it happens.
+</p>
+
+<div class="flow">
+  <div class="node oc"><div class="n-title">Project</div><div class="n-sub">a directory / git worktree</div></div>
+  <div class="node oc"><div class="n-title">Session</div><div class="n-sub">one conversation, bound to the project</div></div>
+  <div class="node oc"><div class="n-title">Message</div><div class="n-sub">a user or assistant turn; the envelope</div></div>
+  <div class="node oc"><div class="n-title">Part</div><div class="n-sub">typed content: text, tool, reasoning, &hellip;</div></div>
+</div>
+
+<h2>Sessions</h2>
+<p>
+  A <span class="term">session</span> is a conversation with the agent, tied to one project directory. It is
+  the OpenCode analogue of a &ldquo;conversation&rdquo; or &ldquo;thread&rdquo;.
+</p>
+<p>A session is identified by an id and carries:</p>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>id</code></td><td>Unique session identifier.</td></tr>
+  <tr><td><code>projectID</code>, <code>directory</code></td><td>The project and working directory the session operates in. Tools run with this as their working directory.</td></tr>
+  <tr><td><code>parentID</code></td><td>Optional. Subagent invocations and forks create <strong>child sessions</strong>; a session with a parent is a child.</td></tr>
+  <tr><td><code>title</code></td><td>Human-readable name, generated automatically by a background &ldquo;title&rdquo; agent.</td></tr>
+  <tr><td><code>time.created / time.updated</code></td><td>Lifecycle timestamps (epoch ms).</td></tr>
+  <tr><td><code>version</code></td><td>Schema version of the session record.</td></tr>
+  <tr><td><code>summary</code></td><td>Optional aggregate: file additions/deletions/changes made during the session.</td></tr>
+  <tr><td><code>revert</code></td><td>Set when a message (or part) has been reverted — a point-in-time rollback bookmark.</td></tr>
+</table>
+
+<h3>Session lifecycle</h3>
+<ul>
+  <li><strong>Create</strong> — a new empty session; optionally with a <code>parentID</code> to attach it as a child.</li>
+  <li><strong>Prompt</strong> — post a user message; the agent responds. This is the core operation (see <em>Messages</em>).</li>
+  <li><strong>Abort</strong> — stop the agent mid-run; the in-flight assistant message is finalized with an abort error.</li>
+  <li><strong>Revert</strong> — roll the session back to a message (or even a single part), undoing later work and restoring the working tree to a snapshot.</li>
+  <li><strong>Fork</strong> — branch a copy of the session at a given message.</li>
+  <li><strong>Summarize / compact</strong> — condense history when context gets long (see <em>Compaction</em>).</li>
+  <li><strong>Delete</strong> — remove the session and its data.</li>
+</ul>
+
+<h3>Session status</h3>
+<p>
+  A session is in one of three states, published over the event stream as <code>session.status</code>:
+</p>
+<table>
+  <tr><th>Status</th><th>Meaning</th></tr>
+  <tr><td><code>idle</code></td><td>No agent activity; safe to prompt.</td></tr>
+  <tr><td><code>busy</code></td><td>The agent is running — generating, streaming, or executing tools. Additional prompts may be queued or rejected depending on the implementation.</td></tr>
+  <tr><td><code>retry</code></td><td>An error occurred; the run is pausing (with an attempt counter and delay) before retrying the request.</td></tr>
+</table>
+<p>
+  A separate <code>session.idle</code> event fires when a run completes. Consumers that need to know
+  &ldquo;is it done?&rdquo; watch for the busy &rarr; idle transition.
+</p>
+
+<h2>Messages</h2>
+<p>
+  A <span class="term">message</span> is one turn in a session, with a role of <code>user</code> or
+  <code>assistant</code>. Messages are <em>envelopes</em>: the visible content lives in the parts
+  attached to them. A message is identified by <code>id</code> and belongs to one
+  <code>sessionID</code>.
+</p>
+
+<h3>User messages</h3>
+<p>Record what the human (or a programmatic client) said:</p>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>role: "user"</code></td><td>Message type discriminator.</td></tr>
+  <tr><td><code>agent</code></td><td>Name of the agent that will handle the response.</td></tr>
+  <tr><td><code>model</code></td><td><code>{ providerID, modelID }</code> — which model will be used for the reply.</td></tr>
+  <tr><td><code>system</code></td><td>Optional per-prompt system prompt override.</td></tr>
+  <tr><td><code>tools</code></td><td>Optional map of tool name &rarr; enabled flag, overriding the agent&rsquo;s default tool set for this prompt.</td></tr>
+  <tr><td><code>time.created</code></td><td>When the user sent it.</td></tr>
+</table>
+
+<h3>Assistant messages</h3>
+<p>Record one full agent run — which may span many model calls:</p>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>role: "assistant"</code></td><td>Message type discriminator.</td></tr>
+  <tr><td><code>parentID</code></td><td>Id of the user message this is a reply to.</td></tr>
+  <tr><td><code>providerID</code>, <code>modelID</code></td><td>Which provider/model actually produced the response.</td></tr>
+  <tr><td><code>mode</code></td><td>The agent mode used for this run (e.g. the agent name).</td></tr>
+  <tr><td><code>path</code></td><td><code>{ cwd, root }</code> — where the agent worked.</td></tr>
+  <tr><td><code>time.created / time.completed</code></td><td>Run start and end.</td></tr>
+  <tr><td><code>cost</code></td><td>Monetary cost of the run in dollars.</td></tr>
+  <tr><td><code>tokens</code></td><td>Usage: <code>input</code>, <code>output</code>, <code>reasoning</code>, and <code>cache.read</code> / <code>cache.write</code>.</td></tr>
+  <tr><td><code>finish</code></td><td>Why the run ended (equivalent to a finish reason: stopped, max length, aborted, &hellip;).</td></tr>
+  <tr><td><code>error</code></td><td>Optional structured error recording why the run failed (see <em>Errors</em>): provider auth failure, unknown error, output-length exceeded, aborted, or API error with status code and body.</td></tr>
+  <tr><td><code>summary</code></td><td>Set when this assistant message is the product of a compaction.</td></tr>
+</table>
+
+<h3>The prompt operation</h3>
+<p>
+  Sending a prompt to a session (<code>POST /session/:id/message</code> or the SDK&rsquo;s
+  <code>session.prompt</code>) does the following:
+</p>
+<ol>
+  <li>Creates a <strong>user message</strong> containing the provided <em>parts</em> (text, files, agent mentions, &hellip;).</li>
+  <li>Creates an <strong>assistant message</strong> as its reply and marks the session busy.</li>
+  <li>Runs the agentic loop (see <em>Steps</em>) until the agent finishes.</li>
+  <li>Returns the finalized assistant message with its parts.</li>
+</ol>
+<p>
+  A variant, <code>noReply</code> / prompt-async, only records the user message (context injection, e.g. by
+  plugins) without triggering a run. When <code>noReply</code> is true, the session stays idle.
+</p>
+
+<h2>Parts</h2>
+<p>
+  A <span class="term">part</span> is a typed unit of content inside a message, identified by <code>id</code>
+  and addressed as <code>sessionID / messageID / partID</code>. Every message&rsquo;s parts form an ordered
+  log of what happened. Streaming works at part granularity: parts are created, appended to, and updated in
+  place as the run progresses.
+</p>
+
+<h3>The part catalog</h3>
+<table>
+  <tr><th>Part type</th><th>Contents</th><th>When it appears</th></tr>
+  <tr>
+    <td><code>text</code></td>
+    <td><code>text</code> string; optional <code>synthetic</code> (tool-generated, not model output) and <code>ignored</code> flags</td>
+    <td>The core visible content. Streamed incrementally via deltas.</td>
+  </tr>
+  <tr>
+    <td><code>reasoning</code></td>
+    <td><code>text</code> — the model&rsquo;s chain of thought</td>
+    <td>Models that expose reasoning traces; distinct from the final answer.</td>
+  </tr>
+  <tr>
+    <td><code>file</code></td>
+    <td><code>mime</code>, <code>filename</code>, <code>url</code>; optionally a <code>source</code> (text range or symbol) in a file</td>
+    <td>Attachments: images, PDFs, documents the user or agent attached. Files can also be attached to tool results.</td>
+  </tr>
+  <tr>
+    <td><code>tool</code></td>
+    <td><code>callID</code>, <code>tool</code> name, <code>input</code> JSON, <code>state</code>, <code>output</code>/<code>error</code></td>
+    <td>Every tool invocation. The heart of tool calling (see below).</td>
+  </tr>
+  <tr>
+    <td><code>step-start</code></td>
+    <td>optional <code>snapshot</code> id of the working tree</td>
+    <td>Start of one model invocation within the agentic loop.</td>
+  </tr>
+  <tr>
+    <td><code>step-finish</code></td>
+    <td><code>reason</code> (why the step ended), <code>cost</code>, <code>tokens</code>, optional snapshot</td>
+    <td>End of a step. Between step-start and step-finish lies one model round trip.</td>
+  </tr>
+  <tr>
+    <td><code>snapshot</code></td>
+    <td>snapshot id</td>
+    <td>Checkpoint of the working tree, enabling revert.</td>
+  </tr>
+  <tr>
+    <td><code>patch</code></td>
+    <td><code>hash</code>, <code>files</code> touched</td>
+    <td>Records that file edits were applied.</td>
+  </tr>
+  <tr>
+    <td><code>agent</code></td>
+    <td><code>name</code>, optional <code>source</code> range of the @-mention in the user text</td>
+    <td>Marks that a user message @-mentioned (invoked) a specific agent.</td>
+  </tr>
+  <tr>
+    <td><code>subtask</code></td>
+    <td><code>prompt</code>, <code>description</code>, <code>agent</code></td>
+    <td>Records that a subagent was spawned from the session (see child sessions).</td>
+  </tr>
+  <tr>
+    <td><code>retry</code></td>
+    <td><code>attempt</code> number, <code>error</code></td>
+    <td>A failed model request being retried.</td>
+  </tr>
+  <tr>
+    <td><code>compaction</code></td>
+    <td><code>auto</code> — whether compaction was automatic</td>
+    <td>Marks that the session was compacted (see <em>Compaction</em>).</td>
+  </tr>
+</table>
+
+<h3>Streaming at the part level</h3>
+<p>
+  As the model generates, the server emits <code>message.part.updated</code> events for the assistant
+  message&rsquo;s parts. For text and reasoning parts each event carries a <code>delta</code> — the newly
+  produced characters — which consumers append to the part&rsquo;s text. Tool parts transition through
+  states rather than accumulating deltas. This event-level streaming is the OpenCode equivalent of SSE
+  token streaming in OpenAI&rsquo;s protocol.
+</p>
+
+<h2>Tool calling</h2>
+<p>
+  OpenCode is an <em>agentic</em> system: the model does not merely answer, it <strong>uses tools</strong> —
+  running shell commands, editing files, searching the codebase, fetching web pages — and iterates. The
+  built-in tool set includes <code>bash</code>, <code>read</code>, <code>write</code>, <code>edit</code>,
+  <code>apply_patch</code>, <code>glob</code>, <code>grep</code>, <code>list</code>, <code>task</code>
+  (subagent invocation), <code>webfetch</code>, <code>websearch</code>, <code>todowrite</code>,
+  <code>question</code>, and <code>skill</code>. Tools can also come from MCP servers or custom definitions.
+</p>
+
+<h3>The tool part</h3>
+<p>Every invocation is represented by a <code>tool</code> part:</p>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>callID</code></td><td>Unique id of this call, generated by the server.</td></tr>
+  <tr><td><code>tool</code></td><td>Tool name, e.g. <code>bash</code>.</td></tr>
+  <tr><td><code>input</code></td><td>Free-form JSON object of the call arguments (e.g. <code>{"command": "ls"}</code>).</td></tr>
+  <tr><td><code>state</code></td><td>Lifecycle state, below.</td></tr>
+  <tr><td><code>title</code></td><td>Human-readable summary of what the tool is doing (set while running and on completion).</td></tr>
+  <tr><td><code>output</code></td><td>String result when completed.</td></tr>
+  <tr><td><code>error</code></td><td>Error message when the call failed.</td></tr>
+  <tr><td><code>attachments</code></td><td>Optional <code>file</code> parts produced by the tool (e.g. a screenshot taken by <code>bash</code>).</td></tr>
+</table>
+
+<h3>Tool state lifecycle</h3>
+<div class="flow">
+  <div class="node oc"><div class="n-title">pending</div><div class="n-sub">call requested by the model, not yet started</div></div>
+  <div class="node oc"><div class="n-title">running</div><div class="n-sub">executing; has start time and title</div></div>
+  <div class="node oc"><div class="n-title">completed</div><div class="n-sub">successful; output, title, duration</div></div>
+  <div class="node oc"><div class="n-title">error</div><div class="n-sub">failed; error message, duration</div></div>
+</div>
+<p>
+  Long-running tools (like <code>bash</code>) can be streamed: the running state carries metadata that is
+  updated while the process produces output.
+</p>
+
+<h3>Permissions</h3>
+<p>
+  Tools are gated by <strong>permissions</strong>, per agent: <code>ask</code> (prompt the user for
+  approval), <code>allow</code> (run without asking), or <code>deny</code> (never run). When a tool needs
+  approval, the server emits a <code>permission.updated</code> event with a permission request containing a
+  title, the pattern matched, and metadata. The consumer responds via the permissions endpoint
+  (<code>session.permissions</code>), optionally with <code>remember</code> to persist the choice. This is a
+  first-class, synchronous decision point inside an otherwise asynchronous run.
+</p>
+
+<h2>Steps and the agentic loop</h2>
+<p>
+  One &ldquo;assistant run&rdquo; is rarely a single model call. The server drives a loop:
+</p>
+<div class="flow">
+  <div class="node mid"><div class="n-title">1. Call the model</div><div class="n-sub">history + tools &rarr; step-start</div></div>
+  <div class="node mid"><div class="n-title">2. Tool calls?</div><div class="n-sub">execute tools &rarr; feed results back</div></div>
+  <div class="node mid"><div class="n-title">3. Finished?</div><div class="n-sub">text reply &rarr; step-finish, run done</div></div>
+</div>
+<p>
+  Each iteration is a <span class="term">step</span>, delimited by <code>step-start</code> and
+  <code>step-finish</code> parts. The <code>step-finish</code> reason records whether the model ended the
+  turn, hit a tool-call boundary, was interrupted, or hit an output limit. The assistant message and its
+  parts accumulate across all steps; the run ends with a session idle event.
+</p>
+<p>
+  Agents may be configured with a maximum step count; when exhausted, the agent is forced to summarize its
+  work in a text response instead of calling more tools.
+</p>
+
+<h2>The event stream</h2>
+<p>
+  The server exposes a server-sent events (SSE) stream at <code>/event</code>. It is the single source of
+  truth for live state. Events are discriminated by <code>type</code> and carry a typed
+  <code>properties</code> payload. The events most relevant to conversation flow:
+</p>
+<table>
+  <tr><th>Event</th><th>Payload highlights</th><th>When</th></tr>
+  <tr><td><code>session.created / updated / deleted</code></td><td>full session object</td><td>Session lifecycle changes.</td></tr>
+  <tr><td><code>session.status</code></td><td><code>idle | busy | retry</code></td><td>Run state transitions.</td></tr>
+  <tr><td><code>session.idle</code></td><td>session id</td><td>Run finished (paired with busy).</td></tr>
+  <tr><td><code>message.updated</code></td><td>full message</td><td>Message created or its metadata changed (tokens, cost, finish, error).</td></tr>
+  <tr><td><code>message.removed</code></td><td>session/message ids</td><td>Message deleted (e.g. by revert).</td></tr>
+  <tr><td><code>message.part.updated</code></td><td><code>part</code>, optional <code>delta</code></td><td>Part created, delta streamed, or state changed (e.g. tool state transitions).</td></tr>
+  <tr><td><code>message.part.removed</code></td><td>session/message/part ids</td><td>Part deleted.</td></tr>
+  <tr><td><code>permission.updated</code></td><td>permission request</td><td>A tool needs approval.</td></tr>
+  <tr><td><code>permission.replied</code></td><td>response</td><td>Approval answered.</td></tr>
+  <tr><td><code>session.error</code></td><td>structured error</td><td>Something went wrong at session scope.</td></tr>
+  <tr><td><code>file.edited</code></td><td>file path</td><td>A tool modified a file.</td></tr>
+  <tr><td><code>todo.updated</code></td><td>todo list</td><td>Agent&rsquo;s task list changed.</td></tr>
+  <tr><td><code>command.executed</code></td><td>name, session, arguments</td><td>A slash command ran.</td></tr>
+</table>
+<p>
+  The first event on a fresh connection is <code>server.connected</code>. Events are the streaming mechanism:
+  a consumer that wants &ldquo;OpenAI-style token streaming&rdquo; from OpenCode translates
+  <code>message.part.updated</code> deltas into response chunks.
+</p>
+
+<h2>Agents</h2>
+<p>
+  An <span class="term">agent</span> is a configured persona: a system prompt, a model, a tool set, and
+  permissions. There are two kinds:
+</p>
+<table>
+  <tr><th>Kind</th><th>Role</th><th>Examples</th></tr>
+  <tr>
+    <td><strong>Primary</strong></td>
+    <td>Holds the main conversation with the user. The user switches between them (e.g. with Tab in the TUI).</td>
+    <td><code>build</code> (all tools), <code>plan</code> (analysis only, changes gated by permissions)</td>
+  </tr>
+  <tr>
+    <td><strong>Subagent</strong></td>
+    <td>Focused workers invoked by a primary agent (via the <code>task</code> tool) or @-mentioned by the user. Each runs in its own child session.</td>
+    <td><code>general</code>, <code>explore</code> (read-only codebase research), <code>scout</code> (external research)</td>
+  </tr>
+</table>
+<p>
+  Agent configuration includes <code>temperature</code>, <code>top_p</code>, <code>description</code>
+  (when to use it), <code>mode</code> (primary/subagent/all), <code>maxSteps</code>, and a
+  <code>permission</code> block. Unknown configuration keys pass through to the provider as model options.
+</p>
+
+<h2>Providers and models</h2>
+<p>
+  OpenCode is model-agnostic. A <span class="term">provider</span> (Anthropic, OpenAI, OpenCode Zen, Ollama,
+  any custom endpoint) exposes <span class="term">models</span>, each addressed as
+  <code>providerID/modelID</code> (e.g. <code>anthropic/claude-sonnet-4-20250514</code>).
+</p>
+<p>Models declare capabilities that matter to an adapter:</p>
+<table>
+  <tr><th>Capability</th><th>Meaning</th></tr>
+  <tr><td><code>temperature</code> / <code>reasoning</code></td><td>Whether the model supports sampling temperature and reasoning output.</td></tr>
+  <tr><td><code>attachment</code></td><td>Whether file/image attachments are accepted.</td></tr>
+  <tr><td><code>toolcall</code></td><td>Whether the model supports tool calling.</td></tr>
+  <tr><td><code>input / output</code></td><td>Supported modalities: text, audio, image, video, pdf.</td></tr>
+  <tr><td><code>limit.context / limit.output</code></td><td>Context and output token budgets.</td></tr>
+  <tr><td><code>cost</code></td><td>Per-token pricing for input/output and cache reads/writes.</td></tr>
+</table>
+<p>
+  The server exposes the configured providers and models over <code>/config/providers</code> and
+  <code>/provider</code>, so consumers can discover what is available rather than hardcoding it.
+</p>
+
+<h2>Compaction</h2>
+<p>
+  Long sessions eventually exceed a model&rsquo;s context window. When that happens, OpenCode performs
+  <span class="term">compaction</span>: a background agent summarizes the conversation so far, and the
+  summarized history replaces the old messages. A <code>compaction</code> part and a
+  <code>session.compacted</code> event mark the transition, and the condensed context is what subsequent
+  model calls see. For an external consumer this looks like the session&rsquo;s history suddenly shrinking —
+  an adapter should not be surprised by it.
+</p>
+
+<h2>Errors</h2>
+<p>
+  OpenCode reports failures as a single <span class="term">structured error</span>: an object discriminated
+  by its <code>type</code> field, so consumers branch on <em>what kind</em> of failure happened rather than
+  parsing prose. The same record shape is reused everywhere the agent loop can fail: on the assistant
+  message, inside <code>retry</code> parts, and on the event stream.
+</p>
+
+<h3>The error shape</h3>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>type</code></td><td>Discriminator &mdash; the kind of error; one of <code>auth</code>, <code>unknown</code>, <code>output</code>, <code>abort</code>, <code>api</code> (below).</td></tr>
+  <tr><td><code>message</code></td><td>Human-readable description of what went wrong.</td></tr>
+  <tr><td><code>status</code></td><td>HTTP status code. Present when the failure arrived over HTTP (the <code>api</code> kind).</td></tr>
+  <tr><td><code>body</code></td><td>Raw payload from the failing endpoint. Present together with <code>status</code>.</td></tr>
+</table>
+
+<h3>Error kinds</h3>
+<table>
+  <tr><th><code>type</code></th><th>Meaning</th><th>Retryable</th></tr>
+  <tr>
+    <td><code>auth</code></td>
+    <td>Provider authentication failed: missing, invalid, or rejected API key or credentials.</td>
+    <td>No &mdash; the key must be fixed, not the request.</td>
+  </tr>
+  <tr>
+    <td><code>unknown</code></td>
+    <td>Something failed that could not be classified.</td>
+    <td>Possibly; a retry may be the only option.</td>
+  </tr>
+  <tr>
+    <td><code>output</code></td>
+    <td>The model&rsquo;s response exceeded the model&rsquo;s output length limit.</td>
+    <td>No &mdash; the run must be restarted with less history or a different step plan.</td>
+  </tr>
+  <tr>
+    <td><code>abort</code></td>
+    <td>The run was stopped mid-flight &mdash; an explicit abort, or the client disconnected. The in-flight assistant message is finalized with this error.</td>
+    <td>No &mdash; the stop was intentional.</td>
+  </tr>
+  <tr>
+    <td><code>api</code></td>
+    <td>The provider returned an HTTP error; carries <code>status</code> and <code>body</code> (e.g. <code>429</code> rate limit, <code>5xx</code> outage).</td>
+    <td>Typically &mdash; depends on the status code.</td>
+  </tr>
+</table>
+
+<h3>Where errors appear</h3>
+<ul>
+  <li>
+    <strong>Assistant message <code>error</code></strong> with <code>finish: "error"</code> &mdash;
+    <em>terminal</em>. The whole run ended in failure; this record is the authoritative account of why,
+    and it is what a consumer shows to its user.
+  </li>
+  <li>
+    <strong><code>retry</code> parts</strong> &mdash; <em>transient</em>. A model request failed but will be
+    retried: the part records the <code>attempt</code> number and the <code>error</code> that triggered the
+    retry. The session status is <code>retry</code> while the run pauses between attempts.
+  </li>
+  <li>
+    <strong><code>tool</code> part <code>error</code> / <code>error</code> state</strong> &mdash; a tool call
+    failed. Unlike model failures this is not an end-of-run problem: the failure text is returned to the
+    model as the tool result and the agent keeps going.
+  </li>
+  <li>
+    <strong><code>session.error</code> event</strong> &mdash; session-scope failures announced over the event
+    stream, carrying the same structured error.
+  </li>
+  <li>
+    <strong>HTTP errors from the server&rsquo;s own API</strong> &mdash; distinct. When a <em>consumer&rsquo;s
+    request</em> is malformed, the server answers over HTTP with a status code and error body, like any REST
+    API. These are protocol errors, not agent errors, and do not appear in the data model.
+  </li>
+</ul>
+
+<h3>Fail &rarr; retry &rarr; resolve</h3>
+<p>
+  A failing model request is not an instant end. The server marks the session <code>retry</code>, records a
+  <code>retry</code> part per attempt, and waits a delay before trying again. Either the retry succeeds and
+  the run proceeds, or the server gives up and the run terminates with a final message whose
+  <code>finish</code> is <code>"error"</code> and whose <code>error</code> field holds the structured
+  record.
+</p>
+<div class="flow">
+  <div class="node mid"><div class="n-title">request fails</div><div class="n-sub">a structured error is produced</div></div>
+  <div class="node mid"><div class="n-title">session pauses</div><div class="n-sub">status &ldquo;retry&rdquo;; retry part with attempt N and delay</div></div>
+  <div class="node oc"><div class="n-title">recovers</div><div class="n-sub">the run continues; the retries stay in history</div></div>
+  <div class="node oc"><div class="n-title">gives up</div><div class="n-sub">finish: &ldquo;error&rdquo; + message.error</div></div>
+</div>
+
+<pre><code>// The canonical record
+{ "type": "auth", "message": "authentication failed" }
+
+// A provider HTTP failure &mdash; status and body included
+{ "type": "api",
+  "status": 429,
+  "body": { "error": { "type": "rate_limit_error", "message": "Rate limit exceeded" } } }
+
+// Terminal &mdash; the run failed, surfaced on the assistant message
+{ "id": "msg_08", "role": "assistant", "finish": "error",
+  "error": { "type": "output", "message": "The response exceeded the output limit" } }
+
+// Transient &mdash; a request being retried
+{ "type": "retry", "attempt": 2,
+  "error": { "type": "api", "status": 500 } }</code></pre>
+
+<h2>Other surfaces</h2>
+<ul>
+  <li><strong>Slash commands</strong> (<code>/init</code>, <code>/undo</code>, &hellip;) — templated prompts executed in a session via the commands endpoint; they produce ordinary messages.</li>
+  <li><strong>Todos</strong> — the agent&rsquo;s live task list for a session (<code>session/:id/todo</code>), updated via <code>todo.updated</code> events.</li>
+  <li><strong>Snapshots &amp; revert</strong> — file-tree checkpoints that make undo possible; <code>snapshot</code> and <code>patch</code> parts record edit history.</li>
+  <li><strong>Shell/PTY</strong> — the server can create interactive pseudo-terminals for running commands that need stdin or long-lived output.</li>
+  <li><strong>File &amp; search APIs</strong> — <code>file.read</code>, <code>find.text</code>, <code>find.files</code>, <code>find.symbols</code> — the same facilities the agent&rsquo;s tools use.</li>
+</ul>
+
+<div class="pager">
+  <a href="index.html"><span class="dir">Previous</span> Overview &amp; glossary</a>
+  <a class="next" href="openai-v1-api.html"><span class="dir">Next</span> The OpenAI v1 API</a>
+</div>
+
+</main>
+
+<footer class="site">
+  Domain documentation — OpenCode and the OpenAI v1 API
+</footer>
+
+</body>
+</html>

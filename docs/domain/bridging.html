@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridging the Domains — OpenCode &amp; OpenAI v1</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html"><span class="mark">G</span> Domain Guides</a>
+    <nav class="site">
+      <a href="index.html">Overview</a>
+      <a href="opencode.html">OpenCode</a>
+      <a href="openai-v1-api.html">OpenAI v1 API</a>
+      <a href="bridging.html" class="active">Bridging</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<h1>Bridging the two domains</h1>
+<p class="lead">
+  An adapter that exposes OpenCode behind the OpenAI v1 protocol is a <em>translation layer</em> between
+  two data models. This guide lays out the conceptual map — what maps cleanly, what requires synthesis, and
+  where the translation is inherently lossy — so an implementation can be shaped deliberately.
+</p>
+
+<h2>The shape of the problem</h2>
+<p>
+  Both systems ultimately do the same thing — maintain a conversation, invoke a model, surface tool calls —
+  but they express it differently:
+</p>
+<table>
+  <tr><th>Dimension</th><th>OpenCode</th><th>OpenAI v1</th></tr>
+  <tr>
+    <td>Conversation unit</td>
+    <td>Session (server-side state, owns history)</td>
+    <td>Stateless request: client resends the full <code>messages</code> array</td>
+  </tr>
+  <tr>
+    <td>Content model</td>
+    <td>Typed <strong>parts</strong> inside messages</td>
+    <td>String or typed <strong>content parts</strong> inside messages</td>
+  </tr>
+  <tr>
+    <td>Tool execution</td>
+    <td>Server executes tools; results stream back as part states</td>
+    <td>Client executes tools; results returned as new <code>tool</code> messages</td>
+  </tr>
+  <tr>
+    <td>Streaming</td>
+    <td>SSE event bus (<code>message.part.updated</code> deltas)</td>
+    <td>SSE completion chunks (<code>choices[].delta</code>)</td>
+  </tr>
+  <tr>
+    <td>State reporting</td>
+    <td>Session statuses, permission requests, todos, snapshots</td>
+    <td>Only the completion itself (plus errors)</td>
+  </tr>
+</table>
+<p>
+  The central insight: <em>the adapter is the agentic loop for the OpenAI side</em>. OpenAI clients send one
+  request and expect one (streamed) completion; OpenCode runs a multi-step agent loop in the background. The
+  adapter must either translate the whole loop into one response or expose the loop&rsquo;s steps in
+  OpenAI&rsquo;s vocabulary.
+</p>
+
+<h2>Concept map</h2>
+<table>
+  <tr><th>OpenCode concept</th><th>OpenAI v1 concept</th><th>Faithfulness</th></tr>
+  <tr>
+    <td>Session</td>
+    <td>A conversation thread; its messages are what the client sends as <code>messages</code></td>
+    <td>1:1 — one session per client conversation. The session&rsquo;s existing history is the conversation the client sees on subsequent turns.</td>
+  </tr>
+  <tr>
+    <td>User message</td>
+    <td><code>user</code> message(s)</td>
+    <td>1:1. Parts inside it become content parts (see below).</td>
+  </tr>
+  <tr>
+    <td>Assistant message</td>
+    <td><code>assistant</code> message in the response</td>
+    <td>1:1, but assembled: OpenCode&rsquo;s assistant message aggregates many steps; OpenAI&rsquo;s per-request assistant message is one step.</td>
+  </tr>
+  <tr>
+    <td><code>text</code> part</td>
+    <td><code>content</code> string (or <code>{"type":"text"}</code> part)</td>
+    <td>1:1. Streamed text deltas &rarr; <code>delta.content</code>.</td>
+  </tr>
+  <tr>
+    <td><code>reasoning</code> part</td>
+    <td><code>reasoning_content</code> in deltas / assistant messages</td>
+    <td>Partial. Only some models/clients expose reasoning; often dropped.</td>
+  </tr>
+  <tr>
+    <td><code>file</code> part</td>
+    <td><code>image_url</code> / content part for the media type</td>
+    <td>Partial — URLs vs base64, mime coverage, audio/video support varies by model.</td>
+  </tr>
+  <tr>
+    <td><code>tool</code> part</td>
+    <td>assistant <code>tool_calls</code> + subsequent <code>tool</code> role messages</td>
+    <td>Rich in OpenCode, flattened in OpenAI&rsquo;s protocol; see below.</td>
+  </tr>
+  <tr>
+    <td><code>step-start</code> / <code>step-finish</code></td>
+    <td>Nothing direct; the boundaries between consecutive tool-call rounds</td>
+    <td>Lossy — steps have no OpenAI equivalent; only the tool-call boundary is visible.</td>
+  </tr>
+  <tr>
+    <td><code>patch</code> / <code>snapshot</code> parts</td>
+    <td>Nothing</td>
+    <td>No mapping; must be dropped or surfaced in tool output text.</td>
+  </tr>
+  <tr>
+    <td><code>agent</code> / <code>subtask</code> parts</td>
+    <td>Nothing (or a <code>task</code> tool call, if exposed)</td>
+    <td>Lossy. OpenCode switches agents/subagents internally; OpenAI sees only tool calls.</td>
+  </tr>
+  <tr>
+    <td><code>compaction</code> / <code>retry</code> parts</td>
+    <td>Nothing</td>
+    <td>Internal mechanics; invisible to the OpenAI client.</td>
+  </tr>
+  <tr>
+    <td>Session status (idle/busy/retry)</td>
+    <td>Nothing in the protocol; a running session simply hasn&rsquo;t responded yet</td>
+    <td>Informational — the adapter uses it to manage concurrency.</td>
+  </tr>
+  <tr>
+    <td>Permission requests</td>
+    <td>Nothing</td>
+    <td>Adapter policy decision: auto-allow (permission config), or fail the request.</td>
+  </tr>
+  <tr>
+    <td>Message <code>finish</code> / step reasons</td>
+    <td><code>finish_reason</code> (<code>stop</code>, <code>length</code>, &hellip;)</td>
+    <td>Map conceptually; exact strings differ.</td>
+  </tr>
+  <tr>
+    <td>Usage: input/output/reasoning/cache tokens, cost</td>
+    <td><code>usage</code> object (prompt/completion/total + details)</td>
+    <td>Reducible: aggregate per-run counts into prompt/completion tokens.</td>
+  </tr>
+  <tr>
+    <td>Tool names (bash, edit, grep, &hellip;)</td>
+    <td><code>tools: [{type:"function", function:{name, parameters}}]</code></td>
+    <td>Declared on request; an adapter must advertise what it will accept.</td>
+  </tr>
+  <tr>
+    <td>Model <code>providerID/modelID</code></td>
+    <td><code>model</code> string</td>
+    <td>1:1 with a naming convention (e.g. provider/model or a curated alias).</td>
+  </tr>
+</table>
+
+<h2>The tool-call translation, in detail</h2>
+<p>OpenCode executes tools <em>itself</em>; OpenAI hands them to the client. The adapter sits in the middle:</p>
+
+<ol>
+  <li>
+    <strong>Outbound (OpenCode &rarr; OpenAI client):</strong> a <code>tool</code> part with state
+    <code>pending/running</code> becomes an assistant <code>tool_calls</code> entry in the streamed or final
+    response. The <code>callID</code> maps to the tool call <code>id</code>; <code>tool</code> maps to
+    <code>function.name</code>; <code>input</code> maps to <code>function.arguments</code> (serialized to a
+    JSON string).
+  </li>
+  <li>
+    <strong>Inbound (client &rarr; OpenCode):</strong> the adapter must execute the call. Two strategies:
+    <ul>
+      <li>
+        <em>Proxy OpenCode&rsquo;s own tools:</em> declare them in <code>tools</code>, translate the client&rsquo;s
+        function call into a prompt-style invocation, and feed results back as new user/context. Simple, but the
+        agent loop then runs <em>on top of</em> the OpenAI client&rsquo;s own loop.
+      </li>
+      <li>
+        <em>Let OpenCode run the loop:</em> let OpenCode&rsquo;s internal tool use happen, then translate each
+        completed/errored <code>tool</code> part back into a <code>tool_calls</code> + <code>tool</code> message
+        pair for the client, ending when OpenCode finishes. This preserves agentic behavior but presents it as
+        ordinary tool calling to the client.
+      </li>
+    </ul>
+  </li>
+  <li>
+    <strong>Tool results (OpenCode &rarr; client):</strong> a <code>completed</code> tool part&rsquo;s
+    <code>output</code> (and <code>error</code> for failed calls) maps to the <code>tool</code> role message
+    content, keyed by <code>tool_call_id</code>.
+  </li>
+</ol>
+
+<h2>Streaming translation</h2>
+<p>The two streaming models map event-by-event:</p>
+<table>
+  <tr><th>OpenCode event</th><th>OpenAI chunk</th></tr>
+  <tr><td><code>message.part.updated</code> — text part, with <code>delta</code></td><td><code>delta.content</code></td></tr>
+  <tr><td><code>message.part.updated</code> — reasoning part</td><td><code>delta.reasoning_content</code> (or dropped)</td></tr>
+  <tr><td><code>message.part.updated</code> — tool part, pending/running</td><td>assistant message start (<code>delta.role</code>) + <code>delta.tool_calls</code> entry with id/name</td></tr>
+  <tr><td><code>message.part.updated</code> — tool part, completed/error</td><td>No chunk; the result belongs to a later <code>tool</code> message round. An adapter driving the full loop emits the <code>tool_calls</code> finish_reason instead.</td></tr>
+  <tr><td><code>session.idle</code></td><td>Final chunk with <code>finish_reason</code> and <code>usage</code></td></tr>
+  <tr><td><code>session.error</code> / message error</td><td>Error chunk or aborted stream</td></tr>
+</table>
+<p>
+  The ordering contract of the OpenAI protocol must be preserved: <code>role</code> delta first, then content,
+  then (optionally) tool-call deltas, then <code>finish_reason</code>. OpenCode events carry no such ordering
+  guarantee, so the adapter must buffer and re-sequence.
+</p>
+
+<h2>The agentic loop mismatch</h2>
+<div class="flow">
+  <div class="node mid"><div class="n-title">OpenCode run</div><div class="n-sub">model &rarr; tools (server-side) &rarr; model &rarr; tools &rarr; &hellip; &rarr; text reply — one assistant message, many steps</div></div>
+  <div class="node mid"><div class="n-title">OpenAI request</div><div class="n-sub">model &rarr; tool_calls (client-side) &rarr; tool messages &rarr; model — one request per round, loop owned by the client</div></div>
+</div>
+<p>
+  This mismatch drives every design decision:
+</p>
+<ul>
+  <li>
+    <strong>One-shot mode:</strong> OpenCode&rsquo;s whole run maps to one OpenAI completion. Every tool OpenCode
+    executed appears in the single response&rsquo;s tool-call history (assistant <code>tool_calls</code> +
+    <code>tool</code> results). The final text is the completion&rsquo;s content. Clients that iterate tool
+    calls will simply have nothing left to execute — a fine outcome for chat-style usage.
+  </li>
+  <li>
+    <strong>Iterative mode:</strong> each OpenCode step is surfaced as one response, and the client&rsquo;s
+    tool-result round trip drives the next step. This preserves interactivity but means one OpenCode run spans
+    multiple OpenAI requests.
+  </li>
+</ul>
+
+<h2>Gaps and lossy translations</h2>
+<ul>
+  <li>
+    <strong>Steps vs rounds.</strong> OpenCode&rsquo;s step boundaries (which include tool execution
+    internally) have no OpenAI equivalent; only the tool-call boundary is representable.
+  </li>
+  <li>
+    <strong>Subagents.</strong> When OpenCode&rsquo;s primary agent delegates to a subagent (a <code>subtask</code>
+    part in a child session), an OpenAI client sees nothing — or, in one-shot mode, a <code>task</code>-style
+    tool call whose results are already folded in.
+  </li>
+  <li>
+    <strong>Permissions.</strong> <code>ask</code>-gated tools pause the run awaiting a human. An adapter must
+    decide policy up front: configure allow/deny, or surface the pending permission as a tool result explaining
+    the denial.
+  </li>
+  <li>
+    <strong>Compaction.</strong> History shrinks mid-session without client awareness. Clients that echo
+    history back (OpenAI&rsquo;s stateless model) may briefly disagree with the session; adapters should
+    reconcile from the session, not from client-supplied history.
+  </li>
+  <li>
+    <strong>Reasoning output.</strong> OpenCode <code>reasoning</code> parts map to <code>reasoning_content</code>
+    only for models/clients that support it; otherwise they must be suppressed.
+  </li>
+  <li>
+    <strong>Cost.</strong> OpenCode tracks dollar cost and cache token details that the OpenAI <code>usage</code>
+    object cannot express exactly; the mapping is an approximation.
+  </li>
+  <li>
+    <strong>Session statefulness.</strong> OpenAI clients are stateless; OpenCode sessions are stateful. If a
+    client sends a partial or modified history, the adapter must choose the source of truth (usually: trust the
+    session, treat the client&rsquo;s messages as the current turn).
+  </li>
+  <li>
+    <strong>Concurrency.</strong> One session is busy while the agent runs; a second request to the same
+    conversation must be queued, rejected, or routed to a fresh session.
+  </li>
+</ul>
+
+<h2>Design guidance for an adapter</h2>
+<ul>
+  <li>
+    Expose <code>GET /v1/models</code> from OpenCode&rsquo;s provider/model discovery so clients can list what
+    they may request.
+  </li>
+  <li>
+    Map the <code>model</code> string to <code>providerID/modelID</code> deterministically, and reject unknown
+    models with a standard 400 error.
+  </li>
+  <li>
+    Implement both streaming and non-streaming from the same underlying event-driven flow; emit SSE chunks only
+    when <code>stream: true</code>.
+  </li>
+  <li>
+    Preserve the OpenAI wire contract strictly (field names, object discriminators, chunk ordering, <code>[DONE]</code>,
+    usage) — see the <a href="openai-v1-api.html#client-expectations">client expectations</a> section of the
+    OpenAI guide.
+  </li>
+  <li>
+    Handle aborts: a client disconnecting mid-stream should abort the OpenCode session so the agent stops working.
+  </li>
+  <li>
+    Keep the translation in one place: an internal, normalized representation of &ldquo;a turn&rdquo; that both
+    domains are rendered into and out of.
+  </li>
+</ul>
+
+<div class="pager">
+  <a href="openai-v1-api.html"><span class="dir">Previous</span> The OpenAI v1 API</a>
+  <a class="next" href="index.html"><span class="dir">Next</span> Overview &amp; glossary</a>
+</div>
+
+</main>
+
+<footer class="site">
+  Domain documentation — OpenCode and the OpenAI v1 API
+</footer>
+
+</body>
+</html>

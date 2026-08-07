@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenAI v1 API — Domain Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html"><span class="mark">G</span> Domain Guides</a>
+    <nav class="site">
+      <a href="index.html">Overview</a>
+      <a href="opencode.html">OpenCode</a>
+      <a href="openai-v1-api.html" class="active">OpenAI v1 API</a>
+      <a href="bridging.html">Bridging</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<h1>The OpenAI v1 API</h1>
+<p class="lead">
+  A plain-HTTP, JSON wire protocol for talking to language models. Because an enormous ecosystem of
+  SDKs, agents, and gateways is built against it, the &ldquo;v1 shape&rdquo; is effectively a standard —
+  any server that reproduces it faithfully is interchangeable with OpenAI&rsquo;s hosted API.
+</p>
+
+<h2>What the API is</h2>
+<p>
+  OpenAI&rsquo;s public API lives at <code>https://api.openai.com/v1</code>, is authenticated with a Bearer
+  token (<code>Authorization: Bearer &lt;key&gt;</code>), and speaks JSON over HTTP. Two generations of
+  completion endpoints exist:
+</p>
+<table>
+  <tr><th>Endpoint</th><th>Style</th><th>Status</th></tr>
+  <tr><td><code>POST /v1/chat/completions</code></td><td>Messages in &rarr; completion out (single or streamed)</td><td>Classic; the de-facto compatibility target that &ldquo;OpenAI-compatible&rdquo; servers implement.</td></tr>
+  <tr><td><code>POST /v1/responses</code></td><td>Conversation state in &rarr; typed output items out</td><td>Newer, evolving; most OpenAI-compatible servers target Chat Completions instead.</td></tr>
+</table>
+<p>
+  This guide focuses on Chat Completions — the shape an OpenAI-compatible adapter must reproduce — and
+  touches on <code>GET /v1/models</code> and the error contract.
+</p>
+
+<h2>Chat Completions — the request</h2>
+<p>A request to <code>POST /v1/chat/completions</code> looks like:</p>
+<pre><code>{
+  "model": "gpt-4o",
+  "messages": [
+    { "role": "system", "content": "You are a helpful assistant." },
+    { "role": "user",   "content": "What is the capital of France?" }
+  ],
+  "temperature": 0.7,
+  "max_completion_tokens": 1024,
+  "stream": false
+}</code></pre>
+
+<h3>Request fields</h3>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>model</code></td><td>Model identifier string. Required.</td></tr>
+  <tr><td><code>messages</code></td><td>Ordered conversation history. Required.</td></tr>
+  <tr><td><code>tools</code>, <code>tool_choice</code></td><td>Tool/function declarations and selection policy (see <em>Tool calling</em>).</td></tr>
+  <tr><td><code>temperature</code>, <code>top_p</code></td><td>Sampling controls; typically 0&ndash;2 / 0&ndash;1. Many compatible servers only accept 0&ndash;1.</td></tr>
+  <tr><td><code>max_completion_tokens</code></td><td>Hard cap on generated tokens. The newer name for <code>max_tokens</code>, which is still accepted by many servers.</td></tr>
+  <tr><td><code>stop</code></td><td>String or array of strings that end generation.</td></tr>
+  <tr><td><code>stream</code></td><td><code>true</code> switches the response from a single JSON body to an SSE stream of chunks.</td></tr>
+  <tr><td><code>stream_options</code></td><td>e.g. <code>{"include_usage": true}</code> to get a final usage chunk in streams.</td></tr>
+  <tr><td><code>n</code></td><td>Number of completions to generate (usually 1; rarely supported by compatible servers).</td></tr>
+  <tr><td><code>response_format</code></td><td><code>{"type": "json_object"}</code> or <code>{"type": "json_schema", "json_schema": {...}}</code> to force structured output.</td></tr>
+  <tr><td><code>parallel_tool_calls</code></td><td>Whether the model may emit multiple tool calls per message (default <code>true</code>).</td></tr>
+  <tr><td><code>seed</code></td><td>Best-effort determinism hint.</td></tr>
+  <tr><td><code>logit_bias</code>, <code>presence_penalty</code>, <code>frequency_penalty</code></td><td>Token-level and repetition controls; optional.</td></tr>
+  <tr><td><code>user</code></td><td>Free-form client identifier for abuse tracking.</td></tr>
+</table>
+
+<h2>Messages and roles</h2>
+<p>
+  The conversation is a list of messages. Each has a <code>role</code> and a <code>content</code> that is
+  either a string or an array of content parts.
+</p>
+<table>
+  <tr><th>Role</th><th>Who speaks</th><th>Notes</th></tr>
+  <tr><td><code>system</code></td><td>The application</td><td>Top-level instructions; conventionally the first message. Some models treat it as a developer message.</td></tr>
+  <tr><td><code>developer</code></td><td>The application</td><td>Newer role name for system-style instructions (o-series models).</td></tr>
+  <tr><td><code>user</code></td><td>The end user</td><td>The actual prompt.</td></tr>
+  <tr><td><code>assistant</code></td><td>The model</td><td>Prior model replies — including any <code>tool_calls</code> it made. Some models also expose <code>reasoning_content</code> here.</td></tr>
+  <tr><td><code>tool</code></td><td>The tool executor</td><td>Result of a tool call; must include <code>tool_call_id</code> matching the assistant&rsquo;s call.</td></tr>
+</table>
+<p>An assistant message with tool calls and the tool results that follow look like:</p>
+<pre><code>{
+  "role": "assistant",
+  "content": null,
+  "tool_calls": [{
+    "id": "call_abc123",
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "arguments": "{\"city\": \"Paris\"}"
+    }
+  }]
+},
+{
+  "role": "tool",
+  "tool_call_id": "call_abc123",
+  "content": "{\"temp\": 21, \"condition\": \"clear\"}"
+}</code></pre>
+
+<h3>Content parts</h3>
+<p>When <code>content</code> is an array, each element is a typed part:</p>
+<table>
+  <tr><th>Part type</th><th>Shape</th><th>Notes</th></tr>
+  <tr><td><code>text</code></td><td><code>{"type": "text", "text": "..."}</code></td><td>Plain text; may carry <code>annotations</code>.</td></tr>
+  <tr><td><code>image_url</code></td><td><code>{"type": "image_url", "image_url": {"url": "..."}}</code></td><td>Image by URL or base64 data URI; optional <code>detail</code> level.</td></tr>
+  <tr><td><code>input_audio</code></td><td><code>{"type": "input_audio", "input_audio": {"data": "base64", "format": "wav"}}</code></td><td>Audio input; format-specific.</td></tr>
+  <tr><td><code>refusal</code></td><td>Present on assistant content when the model declined</td><td>Not a user-supplied part; surfaced in responses.</td></tr>
+</table>
+<p>
+  Note the <em>naming collision</em>: the OpenAI protocol calls these <strong>content parts</strong>, while
+  OpenCode has its own richer <strong>part</strong> model. They play the same structural role (typed content
+  inside a message) but are different vocabularies. See <a href="bridging.html">Bridging</a>.
+</p>
+
+<h2>Tool calling</h2>
+<p>
+  Tool calling (a.k.a. function calling) lets the model request that the application do something. It is a
+  multi-round protocol between client and server — the server never executes tools itself.
+</p>
+
+<h3>1. Declare tools</h3>
+<pre><code>"tools": [{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "parameters": {
+      "type": "object",
+      "properties": { "city": { "type": "string" } },
+      "required": ["city"]
+    }
+  }
+}]</code></pre>
+<p><code>parameters</code> is a JSON Schema object. <code>strict: true</code> requests strict schema adherence.</p>
+
+<h3>2. Choose a policy</h3>
+<ul>
+  <li><code>tool_choice: "auto"</code> — model decides whether to call tools (default).</li>
+  <li><code>tool_choice: "none"</code> — never call tools.</li>
+  <li><code>tool_choice: "required"</code> — must call a tool.</li>
+  <li><code>tool_choice: {"type": "function", "function": {"name": "get_weather"}}</code> — force a specific tool.</li>
+</ul>
+
+<h3>3. Run the loop</h3>
+<p>The client drives the loop — the server is stateless between requests:</p>
+<ol>
+  <li>Send history + tools.</li>
+  <li>If the assistant message contains <code>tool_calls</code>, execute each call application-side.</li>
+  <li>Append the assistant message and one <code>tool</code> message per call (<code>tool_call_id</code> links result &rarr; call).</li>
+  <li>Send the extended history again. Repeat until the model replies without tool calls.</li>
+</ol>
+<div class="flow">
+  <div class="node oa"><div class="n-title">Request</div><div class="n-sub">history + tools</div></div>
+  <div class="node oa"><div class="n-title">Response</div><div class="n-sub">text and/or tool_calls</div></div>
+  <div class="node oa"><div class="n-title">Execute</div><div class="n-sub">client runs the tools</div></div>
+  <div class="node oa"><div class="n-title">Feedback</div><div class="n-sub">append tool messages &rarr; loop</div></div>
+</div>
+<p>
+  Tool-call <code>arguments</code> are always a JSON <em>string</em>, parsed by the client.
+  <code>parallel_tool_calls</code> means one assistant message can carry several calls; each gets its own id
+  and its own <code>tool</code> result message.
+</p>
+
+<h2>Streaming</h2>
+<p>
+  With <code>"stream": true</code> the server responds with <code>Content-Type: text/event-stream</code>
+  (SSE): a sequence of <code>data:</code> frames, each a JSON object, terminated by a
+  <code>data: [DONE]</code> frame.
+</p>
+<pre><code>data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1700000000,
+       "model":"gpt-4o","choices":[{"index":0,
+         "delta":{"role":"assistant","content":""},
+         "finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1700000000,
+       "model":"gpt-4o","choices":[{"index":0,
+         "delta":{"content":"The capital of France"},
+         "finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1700000000,
+       "model":"gpt-4o","choices":[{"index":0,
+         "delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]</code></pre>
+
+<h3>Chunk anatomy</h3>
+<table>
+  <tr><th>Field</th><th>Meaning</th></tr>
+  <tr><td><code>id</code>, <code>object: "chat.completion.chunk"</code></td><td>Identifiers; the id is shared across all chunks of one completion.</td></tr>
+  <tr><td><code>created</code>, <code>model</code></td><td>Metadata.</td></tr>
+  <tr><td><code>choices[]</code></td><td>Per-completion streams (one choice per stream normally). Each has an <code>index</code>.</td></tr>
+  <tr><td><code>delta</code></td><td>The new content of this chunk: <code>role</code> on the first chunk, then <code>content</code> text, then <code>tool_calls</code> fragments for tool-call streams.</td></tr>
+  <tr><td><code>finish_reason</code></td><td><code>null</code> while streaming; set on the final chunk: <code>stop</code>, <code>length</code>, <code>tool_calls</code>, <code>content_filter</code>, <code>function_call</code>.</td></tr>
+  <tr><td><code>usage</code></td><td>Only on the final chunk when <code>stream_options.include_usage</code> is set (with empty <code>choices</code>).</td></tr>
+</table>
+
+<h3>Streaming tool calls</h3>
+<p>Tool calls stream as fragmented deltas; clients accumulate them by index:</p>
+<pre><code>{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function",
+   "function":{"name":"get_weather","arguments":""}}]}}
+{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"ci"}}]}}
+{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ty\": \"Paris\"}"}}]}}</code></pre>
+<p>
+  Note the first chunk carries the call <code>id</code> and <code>name</code>; subsequent chunks carry only
+  <code>arguments</code> fragments. Some models also stream <code>reasoning_content</code> in a separate
+  delta field before the answer.
+</p>
+
+<h2>Non-streaming response</h2>
+<p>With <code>"stream": false</code>, one JSON body comes back:</p>
+<pre><code>{
+  "id": "chatcmpl-1",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "gpt-4o",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Paris is the capital of France."
+    },
+    "logprobs": null,
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 8,
+    "total_tokens": 22,
+    "prompt_tokens_details": { "cached_tokens": 0 },
+    "completion_tokens_details": { "reasoning_tokens": 0 }
+  }
+}</code></pre>
+<p>
+  The <code>message</code> here is the exact object that must be echoed back into the next request&rsquo;s
+  <code>messages</code> (with its <code>tool_calls</code>, if any).
+</p>
+
+<h2>Models endpoint</h2>
+<pre><code>GET /v1/models
+&rarr; { "object": "list", "data": [ { "id": "gpt-4o", "object": "model", "created": ..., "owned_by": "openai" } ] }</code></pre>
+<p>
+  Clients use this to list and validate model ids. An OpenAI-compatible server should return its own
+  available models here.
+</p>
+
+<h2>Errors</h2>
+<p>Errors are JSON with a consistent envelope:</p>
+<pre><code>{
+  "error": {
+    "message": "Incorrect API key provided",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "invalid_api_key"
+  }
+}</code></pre>
+<table>
+  <tr><th>HTTP status</th><th>Typical <code>type</code></th><th>Meaning</th></tr>
+  <tr><td>400</td><td><code>invalid_request_error</code></td><td>Malformed body, unknown model, invalid schema.</td></tr>
+  <tr><td>401</td><td><code>authentication_error</code></td><td>Missing/bad API key.</td></tr>
+  <tr><td>403</td><td><code>permission_error</code></td><td>Key lacks permission.</td></tr>
+  <tr><td>404</td><td><code>not_found</code> / <code>invalid_request_error</code></td><td>Unknown endpoint or model.</td></tr>
+  <tr><td>429</td><td><code>rate_limit_error</code></td><td>Too many requests; may include <code>Retry-After</code>.</td></tr>
+  <tr><td>500/502/503/504</td><td><code>server_error</code> / <code>api_error</code> / <code>overloaded_error</code></td><td>Upstream failure; retryable.</td></tr>
+</table>
+
+<h2 id="client-expectations">What clients expect of a compatible server</h2>
+<ul>
+  <li>Exact field names and nesting — clients parse <code>choices[0].message.content</code>,
+    <code>delta.tool_calls</code>, and so on verbatim; renaming breaks them.</li>
+  <li>Correct <code>object</code> discriminators: <code>chat.completion</code>, <code>chat.completion.chunk</code>, <code>list</code>.</li>
+  <li>Proper SSE framing (<code>data: ...</code> + blank line, <code>[DONE]</code> terminator) with the standard content type.</li>
+  <li>Request <code>messages</code> echoed back faithfully — clients keep sending prior assistant/tool messages and expect the server to tolerate them.</li>
+  <li>Faithful <code>finish_reason</code> values and (ideally) <code>usage</code>.</li>
+  <li>Streaming and non-streaming paths both implemented; many clients silently default to streaming.</li>
+</ul>
+
+<div class="pager">
+  <a href="opencode.html"><span class="dir">Previous</span> The OpenCode domain</a>
+  <a class="next" href="bridging.html"><span class="dir">Next</span> Bridging the two domains</a>
+</div>
+
+</main>
+
+<footer class="site">
+  Domain documentation — OpenCode and the OpenAI v1 API
+</footer>
+
+</body>
+</html>

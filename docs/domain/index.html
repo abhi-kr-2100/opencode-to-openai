@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Domain Guides — OpenCode &amp; the OpenAI v1 API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <a class="brand" href="index.html"><span class="mark">G</span> Domain Guides</a>
+    <nav class="site">
+      <a href="index.html" class="active">Overview</a>
+      <a href="opencode.html">OpenCode</a>
+      <a href="openai-v1-api.html">OpenAI v1 API</a>
+      <a href="bridging.html">Bridging</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<h1>OpenCode &amp; the OpenAI v1 API</h1>
+<p class="lead">
+  Domain reference for bridging a local <a href="opencode.html">OpenCode</a> installation
+  to the <a href="openai-v1-api.html">OpenAI v1 API</a> protocol.
+  These guides describe the two domains on their own terms and the conceptual seams between them —
+  they are written to inform an implementation, not to describe one.
+</p>
+
+<h2>The two domains</h2>
+
+<p>
+  An <strong>OpenAI-compatible server</strong> is a program that speaks the HTTP + JSON wire protocol
+  that OpenAI&rsquo;s public API exposes under <code>/v1</code>. Thousands of tools — SDKs, wrappers,
+  agents, and LLM gateways — are built against this one protocol, so any server that speaks it can stand
+  in for OpenAI&rsquo;s hosted service. <em>OpenCode</em> is a different kind of system entirely: a local,
+  terminal-first <em>agentic coding</em> product. It exposes its own HTTP/SSE server and a JS SDK whose
+  data model is built around <strong>sessions</strong>, <strong>messages</strong>, and <strong>parts</strong>.
+</p>
+
+<p>
+  These guides cover the vocabulary and mechanics of both domains and the translation problem between them.
+  The full picture looks like this:
+</p>
+
+<div class="flow">
+  <div class="node oa">
+    <div class="n-title">OpenAI client</div>
+    <div class="n-sub">SDK / chat UI / agent framework</div>
+  </div>
+  <div class="node mid">
+    <div class="n-title">Adapter</div>
+    <div class="n-sub">/v1 endpoints &rarr; OpenCode server calls</div>
+  </div>
+  <div class="node oc">
+    <div class="n-title">OpenCode</div>
+    <div class="n-sub">session engine, tools, events</div>
+  </div>
+  <div class="node oa">
+    <div class="n-title">Local model / provider</div>
+    <div class="n-sub">Anthropic, OpenAI, Ollama, Zen &hellip;</div>
+  </div>
+</div>
+
+<h2>Guides</h2>
+
+<div class="card-grid">
+  <a class="card" href="opencode.html">
+    <div class="kicker">Domain A</div>
+    <h3>OpenCode <span class="tag oc">OpenCode</span></h3>
+    <p>Sessions, messages, parts, tool calls, steps, the event bus, agents, models, and context compaction.</p>
+  </a>
+  <a class="card" href="openai-v1-api.html">
+    <div class="kicker">Domain B</div>
+    <h3>OpenAI v1 API <span class="tag oa">OpenAI</span></h3>
+    <p>Chat Completions wire protocol: messages, content parts, function calling, streaming chunks, usage, and errors.</p>
+  </a>
+  <a class="card" href="bridging.html">
+    <div class="kicker">The seam</div>
+    <h3>Bridging the two domains</h3>
+    <p>How OpenCode&rsquo;s data model maps onto the OpenAI protocol — including the gaps where translation is lossy.</p>
+  </a>
+</div>
+
+<h2>Who this is for</h2>
+<p>
+  Anyone implementing or extending an adapter that exposes OpenCode behind an OpenAI-shaped API. It assumes
+  no prior knowledge of either system. Implementers should read all three guides in order; a quick refresher
+  on one system alone requires only its dedicated guide.
+</p>
+
+<h2>Glossary</h2>
+
+<p>
+  Each term is tagged with its domain
+  (<span class="tag oc">OpenCode</span> /
+  <span class="tag oa">OpenAI</span>), followed by a worked example and, where useful, a visualization.
+</p>
+
+<dl class="glossary">
+
+  <dt>Session <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      OpenCode&rsquo;s unit of conversation: one thread of user prompts and agent responses, bound to a
+      project directory. Carries a title, timestamps, a model, an agent, and possibly a parent session.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example</div>
+      <pre><code>{
+  "id": "sess_01",
+  "directory": "/home/me/app",
+  "title": "Add auth to /settings",
+  "time": { "created": 1754000000000, "updated": 1754000123000 }
+}</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — a session is a timeline of messages</div>
+      <div class="flow">
+        <div class="node oc"><div class="n-title">user</div><div class="n-sub">"Add auth to /settings"</div></div>
+        <div class="node oc"><div class="n-title">assistant</div><div class="n-sub">text + tool call</div></div>
+        <div class="node oc"><div class="n-title">assistant</div><div class="n-sub">tool result</div></div>
+        <div class="node oc"><div class="n-title">assistant</div><div class="n-sub">final text reply</div></div>
+      </div>
+    </div>
+  </dd>
+
+  <dt>Message <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      A single turn in an OpenCode session, of role <code>user</code> or <code>assistant</code>. Messages are
+      envelopes: the actual content lives in their <em>parts</em>. Messages also carry metadata such as the
+      model used, token counts, cost, finish reason, and errors.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — user and assistant messages</div>
+      <pre><code>// user message
+{ "id": "msg_02", "sessionID": "sess_01", "role": "user",
+  "agent": "build",
+  "model": { "providerID": "anthropic", "modelID": "claude-sonnet-4-20250514" } }
+
+// assistant message (envelope; content lives in parts)
+{ "id": "msg_07", "sessionID": "sess_01", "role": "assistant",
+  "parentID": "msg_02",
+  "providerID": "anthropic", "modelID": "claude-sonnet-4-20250514",
+  "finish": "stop", "cost": 0.0042,
+  "tokens": { "input": 4120, "output": 500, "reasoning": 120 } }</code></pre>
+    </div>
+  </dd>
+
+  <dt>Part <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      A typed unit of content inside a message. OpenCode has parts for text, reasoning traces, files, tool
+      calls, step boundaries, snapshots, patches, and more. Parts are the fine-grained currency of streaming.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — a text part and a tool part</div>
+      <pre><code>{ "id": "part_01", "sessionID": "sess_01", "messageID": "msg_07",
+  "type": "text", "text": "I'll investigate the flaky test." }
+
+{ "id": "part_03", "sessionID": "sess_01", "messageID": "msg_07",
+  "type": "tool", "callID": "call_01", "tool": "bash",
+  "input": { "command": "npm test" },
+  "state": { "status": "completed", "output": "PASS 12/12" } }</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — nesting: session &rsaquo; message &rsaquo; parts</div>
+      <div class="nest">
+        <span class="n-label">Session</span> sess_01
+        <div class="nest">
+          <span class="n-label">Message</span> user &mdash; msg_02
+          <div class="nest"><span class="n-label">part</span> text: "Fix the flaky test"</div>
+          <div class="nest"><span class="n-label">part</span> file: failure.png</div>
+        </div>
+        <div class="nest">
+          <span class="n-label">Message</span> assistant &mdash; msg_07
+          <div class="nest"><span class="n-label">part</span> step-start</div>
+          <div class="nest"><span class="n-label">part</span> reasoning: "The test times out…"</div>
+          <div class="nest"><span class="n-label">part</span> text: "I'll investigate."</div>
+          <div class="nest"><span class="n-label">part</span> tool: bash &ldquo;npm test&rdquo; &rarr; PASS</div>
+          <div class="nest"><span class="n-label">part</span> step-finish</div>
+        </div>
+      </div>
+    </div>
+  </dd>
+
+  <dt>Tool call <span class="tag oc">OpenCode</span> <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      The act of the model requesting an external operation (run a command, edit a file, fetch a URL, &hellip;).
+      In OpenCode a <code>tool</code> part records the call id, tool name, JSON input, and a lifecycle of
+      <em>pending &rarr; running &rarr; completed/error</em>. In the OpenAI protocol the same act is split
+      across an assistant <code>tool_calls</code> field and a subsequent <code>tool</code> role message.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — the same call in both dialects</div>
+      <pre><code>// OpenCode: one part that the server executes
+{ "type": "tool", "callID": "call_01", "tool": "bash",
+  "input": { "command": "npm test" },
+  "state": { "status": "completed", "output": "PASS 12/12" } }
+
+// OpenAI: the client must execute it and feed the result back
+{ "role": "assistant", "content": null, "tool_calls": [{
+    "id": "call_01", "type": "function",
+    "function": { "name": "bash", "arguments": "{\"command\":\"npm test\"}" } }] },
+{ "role": "tool", "tool_call_id": "call_01", "content": "PASS 12/12" }</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — tool part state machine</div>
+      <div class="flow">
+        <div class="node oc"><div class="n-title">pending</div><div class="n-sub">requested by the model</div></div>
+        <div class="node oc"><div class="n-title">running</div><div class="n-sub">executing &hellip;</div></div>
+        <div class="node oc"><div class="n-title">completed</div><div class="n-sub">output returned to the model</div></div>
+        <div class="node oc"><div class="n-title">error</div><div class="n-sub">failure returned to the model</div></div>
+      </div>
+    </div>
+  </dd>
+
+  <dt>Step <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      One model invocation within an agentic loop. A response that ends in tool calls triggers another step;
+      a response that &ldquo;finishes&rdquo; ends the loop. OpenCode marks steps with <code>step-start</code>
+      and <code>step-finish</code> parts.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — step-finish part</div>
+      <pre><code>{ "type": "step-finish", "reason": "tool_calls",
+  "cost": 0.0011,
+  "tokens": { "input": 4120, "output": 380, "reasoning": 120 } }</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — one run is many steps</div>
+      <div class="flow">
+        <div class="node mid"><div class="n-title">step 1</div><div class="n-sub">model &rarr; tool calls</div></div>
+        <div class="node mid"><div class="n-title">step 2</div><div class="n-sub">model &rarr; tool calls</div></div>
+        <div class="node mid"><div class="n-title">step 3</div><div class="n-sub">model &rarr; text reply</div></div>
+        <div class="node oc"><div class="n-title">run done</div><div class="n-sub">session.idle</div></div>
+      </div>
+    </div>
+  </dd>
+
+  <dt>Agent <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      A configured persona in OpenCode with its own system prompt, model, and tool permissions. Primary agents
+      (build, plan) hold the main conversation; subagents (general, explore, &hellip;) are invoked for focused
+      work.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — agent configuration</div>
+      <pre><code>{
+  "agent": {
+    "code-reviewer": {
+      "description": "Reviews code for quality and potential issues",
+      "mode": "subagent",
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "prompt": "You are a code reviewer. Focus on security and maintainability.",
+      "permission": { "edit": "deny" }
+    }
+  }
+}</code></pre>
+    </div>
+  </dd>
+
+  <dt>Event bus <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      OpenCode&rsquo;s real-time channel. A server-sent events stream emits <code>message.updated</code>,
+      <code>message.part.updated</code> (with streaming deltas), <code>session.status</code>,
+      <code>permission.updated</code>, and similar events.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — three events as received over SSE</div>
+      <pre><code>data: {"type":"message.part.updated","properties":{
+  "part":{"id":"part_02","type":"text","text":"The fix is simple: "},
+  "delta":"The fix is simple: "}}
+
+data: {"type":"message.part.updated","properties":{
+  "part":{"id":"part_02","type":"text","text":"The fix is simple: bump the timeout."},
+  "delta":"bump the timeout."}}
+
+data: {"type":"session.idle","properties":{"sessionID":"sess_01"}}</code></pre>
+    </div>
+  </dd>
+
+  <dt>Compaction <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      Automatic context management: when a session grows past the model&rsquo;s context limit, OpenCode
+      summarizes earlier turns and replaces them with a condensed assistant message.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Visualization — history shrinks, context fits again</div>
+      <div class="flow">
+        <div class="node mid"><div class="n-title">long history</div><div class="n-sub">12 messages, context at the limit</div></div>
+        <div class="node oc"><div class="n-title">compaction</div><div class="n-sub">a hidden agent summarizes</div></div>
+        <div class="node oc"><div class="n-title">after</div><div class="n-sub">1 summary message + recent turns</div></div>
+      </div>
+    </div>
+  </dd>
+
+  <dt>Error <span class="tag oc">OpenCode</span></dt>
+  <dd>
+    <p>
+      OpenCode&rsquo;s structured failure record, discriminated by a <code>type</code> field: one of
+      <code>auth</code> (bad credentials), <code>unknown</code> (unclassified), <code>output</code>
+      (exceeded the output limit), <code>abort</code> (run stopped mid-flight), or <code>api</code>
+      (provider HTTP failure, carrying <code>status</code> and <code>body</code>). The record surfaces on
+      the assistant message (authoritative, with <code>finish: "error"</code>), transiently in
+      <code>retry</code> parts, as a string on failed tool calls, and over the <code>session.error</code>
+      event.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — the same kind of failure, at two lifecycle points</div>
+      <pre><code>// transient: a request being retried
+{ "type": "retry", "attempt": 2,
+  "error": { "type": "api", "status": 429,
+             "body": { "error": { "message": "Rate limit exceeded" } } } }
+
+// terminal: the run finally failed
+{ "role": "assistant", "finish": "error",
+  "error": { "type": "api", "status": 429 } }</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — the two fates of a failed request</div>
+      <div class="flow">
+        <div class="node mid"><div class="n-title">error</div><div class="n-sub">structured record</div></div>
+        <div class="node mid"><div class="n-title">session &ldquo;retry&rdquo;</div><div class="n-sub">attempt N, delay</div></div>
+        <div class="node oc"><div class="n-title">succeeds</div><div class="n-sub">run continues</div></div>
+        <div class="node oc"><div class="n-title">gives up</div><div class="n-sub">finish &ldquo;error&rdquo;</div></div>
+      </div>
+    </div>
+    <p>
+      Distinct from OpenAI&rsquo;s error contract, where failures are HTTP statuses with an
+      <code>error</code> object in the body (see the OpenAI guide).
+    </p>
+  </dd>
+
+  <dt>Chat Completions <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      OpenAI&rsquo;s classic endpoint (<code>POST /v1/chat/completions</code>). Accepts a list of messages and
+      returns a completion, either in one response or as a stream of SSE chunks. The de-facto standard that
+      OpenAI-compatible servers reproduce.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — a request</div>
+      <pre><code>curl -X POST https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{ "role": "user", "content": "Say hello" }],
+    "stream": true
+  }'</code></pre>
+    </div>
+  </dd>
+
+  <dt>Content part <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      An element of a message&rsquo;s <code>content</code> array in the OpenAI protocol: text, an image URL,
+      audio, &hellip; Not to be confused with OpenCode&rsquo;s part model, though they play a similar role.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — array content with two parts</div>
+      <pre><code>"content": [
+  { "type": "text", "text": "This is the failing test:" },
+  { "type": "image_url", "image_url": {
+      "url": "data:image/png;base64,iVBORw0KGgo..." } }
+]</code></pre>
+    </div>
+  </dd>
+
+  <dt>Streaming chunk <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      One SSE <code>data:</code> frame of a streaming Chat Completion. Each chunk carries a
+      <code>choices</code> array with a <code>delta</code> (partial role/content/tool-call data) and, for the
+      final chunk, a <code>finish_reason</code>.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — the stream, chunk by chunk</div>
+      <pre><code>data: {"id":"chatcmpl_01","object":"chat.completion.chunk","choices":[
+  {"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl_01","object":"chat.completion.chunk","choices":[
+  {"index":0,"delta":{"content":"Paris"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl_01","object":"chat.completion.chunk","choices":[
+  {"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — the sequence a client sees</div>
+      <div class="flow">
+        <div class="node oa"><div class="n-title">chunk #1</div><div class="n-sub">delta.role</div></div>
+        <div class="node oa"><div class="n-title">chunks #2 &hellip; n</div><div class="n-sub">delta.content deltas</div></div>
+        <div class="node oa"><div class="n-title">final</div><div class="n-sub">delta {} + finish_reason</div></div>
+        <div class="node oa"><div class="n-title">[DONE]</div><div class="n-sub">stream closed</div></div>
+      </div>
+    </div>
+  </dd>
+
+  <dt>Delta <span class="tag oc">OpenCode</span> <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      The <em>increment</em> of new content carried by one event in a stream — never the whole message.
+      In OpenCode, each <code>message.part.updated</code> event carries a <code>delta</code> string that the
+      consumer appends to the part&rsquo;s growing text. In the OpenAI protocol, each streaming chunk&rsquo;s
+      <code>delta</code> object holds the newly produced fragment of role, content, or tool-call data. Both
+      dialects are <em>incremental</em>: everything before the delta is already known, so accumulating deltas
+      in order reconstructs the full output.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — the same sentence, delta by delta, in both dialects</div>
+      <pre><code>// OpenCode: message.part.updated events
+delta: "The fix"
+delta: " is simple:"
+delta: " bump the timeout."
+
+// OpenAI: chat.completion.chunk deltas
+"delta": { "role": "assistant" }
+"delta": { "content": "The fix" }
+"delta": { "content": " is simple:" }
+"delta": { "content": " bump the timeout." }</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — deltas accumulate into the full text</div>
+      <div class="flow">
+        <div class="node oa"><div class="n-title">delta 1</div><div class="n-sub">"The fix"</div></div>
+        <div class="node mid"><div class="n-title">accumulate</div><div class="n-sub">append</div></div>
+        <div class="node oa"><div class="n-title">delta 2</div><div class="n-sub">" is simple:"</div></div>
+        <div class="node mid"><div class="n-title">accumulate</div><div class="n-sub">append</div></div>
+        <div class="node oa"><div class="n-title">delta 3</div><div class="n-sub">" bump the timeout."</div></div>
+        <div class="node oc"><div class="n-title">full text</div><div class="n-sub">"The fix is simple: bump the timeout."</div></div>
+      </div>
+    </div>
+    <p>
+      Caveat for implementers: deltas must be consumed <em>in order</em>, and a delta always updates the part
+      or message it belongs to — an out-of-order delta corrupts the accumulated text.
+    </p>
+  </dd>
+
+  <dt>SSE <span class="tag oc">OpenCode</span> <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      Server-Sent Events, the HTTP-based streaming format (<code>text/event-stream</code>) used by both the
+      OpenAI protocol and OpenCode&rsquo;s event stream.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — raw wire format</div>
+      <pre><code>data: {"type": "session.status", "properties": { "sessionID": "sess_01", "status": "busy" }}
+
+data: {"type": "message.part.updated", "properties": { "delta": "The fix is simple: " }}</code></pre>
+    </div>
+  </dd>
+
+  <dt>Tool <span class="tag oc">OpenCode</span> <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      An operation exposed to the model with a name, description, and JSON Schema parameter specification.
+      OpenCode ships tools like <code>bash</code>, <code>edit</code>, <code>read</code>, and
+      <code>webfetch</code>; the OpenAI protocol declares them in the request <code>tools</code> array.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — declaring a tool</div>
+      <pre><code>"tools": [{
+  "type": "function",
+  "function": {
+    "name": "bash",
+    "description": "Run a shell command in the project directory",
+    "parameters": {
+      "type": "object",
+      "properties": { "command": { "type": "string" } },
+      "required": ["command"]
+    }
+  }
+}]</code></pre>
+    </div>
+  </dd>
+
+  <dt>Finish reason <span class="tag oc">OpenCode</span> <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      Why the model stopped generating: <code>stop</code>, <code>length</code>, <code>tool_calls</code>,
+      <code>content_filter</code>. In OpenCode this surfaces as the message-level <code>finish</code> field and
+      the <code>step-finish</code> part reason.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — final response fragment</div>
+      <pre><code>"choices": [{
+  "index": 0,
+  "message": { "role": "assistant", "content": "Tests pass now." },
+  "finish_reason": "stop"
+}]</code></pre>
+    </div>
+  </dd>
+
+  <dt>Usage <span class="tag oc">OpenCode</span> <span class="tag oa">OpenAI</span></dt>
+  <dd>
+    <p>
+      Token accounting attached to a response. The OpenAI protocol reports <code>prompt_tokens</code>,
+      <code>completion_tokens</code>, and <code>total_tokens</code>; OpenCode tracks input, output, reasoning,
+      and cache read/write tokens plus a dollar cost.
+    </p>
+    <div class="ex">
+      <div class="ex-title">Example — OpenAI usage object</div>
+      <pre><code>"usage": {
+  "prompt_tokens": 4120,
+  "completion_tokens": 500,
+  "total_tokens": 4620
+}</code></pre>
+    </div>
+    <div class="ex">
+      <div class="ex-title">Visualization — OpenCode &rarr; OpenAI token mapping</div>
+      <div class="flow">
+        <div class="node oc"><div class="n-title">OpenCode</div><div class="n-sub">tokens.input + cache.read</div></div>
+        <div class="node mid"><div class="n-title">aggregate</div><div class="n-sub">sum per run</div></div>
+        <div class="node oa"><div class="n-title">OpenAI</div><div class="n-sub">prompt_tokens</div></div>
+        <div class="node mid"><div class="n-title">aggregate</div><div class="n-sub">sum per run</div></div>
+        <div class="node oa"><div class="n-title">OpenAI</div><div class="n-sub">completion_tokens</div></div>
+      </div>
+    </div>
+  </dd>
+
+</dl>
+
+</main>
+
+<footer class="site">
+  Domain documentation — OpenCode and the OpenAI v1 API
+</footer>
+
+</body>
+</html>
