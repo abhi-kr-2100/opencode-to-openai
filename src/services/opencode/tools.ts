@@ -208,17 +208,24 @@ export function parseToolCallPayload(raw: string): ParsedToolCall | null {
   if (!isRecord(payload)) return null;
   const name = typeof payload.name === "string" ? payload.name : "";
   if (name.length === 0) return null;
-  return { name, arguments: argumentsJson(payload.arguments) ?? "{}" };
+  const args = argumentsJson(payload.arguments);
+  if (args === undefined) return null;
+  return { name, arguments: args ?? "{}" };
 }
 
-/** Coerces a call's arguments into a JSON string, accepting objects and strings. */
-function argumentsJson(value: unknown): string | null {
+/**
+ * Coerces a call's arguments into a JSON string, accepting objects and
+ * already-serialized strings. Returns null when the value is neither an
+ * object, array, nor string, and undefined when an object or array cannot be
+ * serialized (for example a cyclic or otherwise unserializable value).
+ */
+function argumentsJson(value: unknown): string | null | undefined {
   if (typeof value === "string") return value;
   if (isRecord(value) || Array.isArray(value)) {
     try {
       return JSON.stringify(value);
     } catch {
-      return null;
+      return undefined;
     }
   }
   return null;
