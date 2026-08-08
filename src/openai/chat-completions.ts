@@ -4,12 +4,12 @@ import { z } from "zod";
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
 /** A text content part in a message's `content` array. */
-const textContentPartSchema = z.object({ type: z.literal("text"), text: z.string() }).loose();
+const textContentPartSchema = z.object({ type: z.literal("text"), text: z.string() });
 
 /** An image content part in a message's `content` array. */
 const imageUrlContentPartSchema = z.object({
   type: z.literal("image_url"),
-  image_url: z.object({ url: z.string(), detail: z.string().optional() }).loose(),
+  image_url: z.object({ url: z.string(), detail: z.string().optional() }),
 });
 
 /** The content part shapes this server can turn into opencode parts. */
@@ -20,9 +20,8 @@ const toolCallSchema = z
   .object({
     id: z.string().optional(),
     type: z.literal("function").optional(),
-    function: z.object({ name: z.string(), arguments: z.string().optional() }).loose().optional(),
-  })
-  .loose();
+    function: z.object({ name: z.string(), arguments: z.string().optional() }).optional(),
+  });
 
 /** A caller-supplied tool definition. */
 const toolSchema = z.object({
@@ -32,14 +31,13 @@ const toolSchema = z.object({
       name: z.string(),
       description: z.string().optional(),
       parameters: jsonObjectSchema.optional(),
-    })
-    .loose(),
+    }),
 });
 
 /** A `tool_choice` naming a specific function. */
 const toolChoiceFunctionSchema = z.object({
   type: z.literal("function"),
-  function: z.object({ name: z.string() }).loose(),
+  function: z.object({ name: z.string() }),
 });
 
 export const chatMessageSchema = z.object({
@@ -72,9 +70,7 @@ export const chatCompletionRequestSchema = z
     stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
     tools: z.array(toolSchema).optional(),
     tool_choice: z.union([z.string(), toolChoiceFunctionSchema]).optional(),
-  })
-  // Unknown fields are tolerated so forward-compatible OpenAI request shapes don't break us.
-  .loose();
+  });
 
 export type ChatCompletionRequest = z.infer<typeof chatCompletionRequestSchema>;
 export type ChatCompletionMessage = z.infer<typeof chatMessageSchema>;
