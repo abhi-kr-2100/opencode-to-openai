@@ -90,11 +90,7 @@ export function toPrompt(
 
   const conversation = messages.slice(index);
   for (const message of conversation) {
-    if (isSystemRole(message.role)) {
-      throw new BadRequestError(
-        `a ${message.role} message cannot follow a user message: system instructions must come first`,
-      );
-    }
+    assertConversationRole(message.role);
   }
 
   let lastUserIndex = -1;
@@ -144,20 +140,16 @@ function flattenTranscript(
 /** Renders a single conversation turn as a transcript line with role markers. */
 function transcriptText(message: ChatCompletionMessage): string {
   const text = contentText(message) ?? "";
-  switch (message.role) {
-    case "user":
-      return text.length > 0 ? `user: ${text}` : "user:";
-    case "assistant": {
-      const lines: string[] = [];
-      if (text.length > 0) lines.push(`assistant: ${text}`);
-      for (const call of toolCallsOf(message)) lines.push(call);
-      return lines.join("\n");
-    }
-    case "tool":
-      return `tool${message.tool_call_id ? ` (${message.tool_call_id})` : ""}: ${text}`;
-    default:
-      return "";
+  if (message.role === "user") {
+    return text.length > 0 ? `user: ${text}` : "user:";
   }
+  if (message.role === "assistant") {
+    const lines: string[] = [];
+    if (text.length > 0) lines.push(`assistant: ${text}`);
+    for (const call of toolCallsOf(message)) lines.push(call);
+    return lines.join("\n");
+  }
+  return `tool${message.tool_call_id ? ` (${message.tool_call_id})` : ""}: ${text}`;
 }
 
 /** Renders the tool calls attached to an assistant message as emulated blocks. */
@@ -178,6 +170,19 @@ function toolCallsOf(message: ChatCompletionMessage): string[] {
 
 function isSystemRole(role: ChatCompletionMessage["role"] | undefined): boolean {
   return role === "system" || role === "developer";
+}
+
+function assertConversationRole(
+  role: ChatCompletionMessage["role"] | undefined,
+): asserts role is "user" | "assistant" | "tool" {
+  if (isSystemRole(role)) {
+    throw new BadRequestError(
+      `a ${role} message cannot follow a user message: system instructions must come first`,
+    );
+  }
+  if (role !== "user" && role !== "assistant" && role !== "tool") {
+    throw new BadRequestError(`unsupported message role ${JSON.stringify(role)}`);
+  }
 }
 
 /** Extracts the text content of a message, joining array text parts with newlines. */
