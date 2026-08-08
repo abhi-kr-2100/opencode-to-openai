@@ -1,6 +1,9 @@
 import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk";
 import { BadRequestError } from "../../http/errors.ts";
-import type { ChatCompletionMessage } from "../../openai/chat-completions.ts";
+import type {
+  ChatCompletionMessage,
+  ChatCompletionRequest,
+} from "../../openai/chat-completions.ts";
 import { isRecord, mimeFromUrl } from "./guards.ts";
 import { renderToolSection } from "./tools.ts";
 
@@ -23,7 +26,8 @@ export function toParts(messages: ChatCompletionMessage[]): Array<TextPartInput 
         if (!isRecord(contentPart)) {
           throw new BadRequestError("message content parts must be objects");
         }
-        switch (contentPart.type) {
+        const type = contentPart.type;
+        switch (type) {
           // Text parts pass through as-is.
           case "text":
             if (typeof contentPart.text !== "string") {
@@ -43,9 +47,7 @@ export function toParts(messages: ChatCompletionMessage[]): Array<TextPartInput 
             });
             break;
           default:
-            throw new BadRequestError(
-              `unsupported content part type ${JSON.stringify(contentPart.type)}`,
-            );
+            throw new BadRequestError(`unsupported content part type ${JSON.stringify(type)}`);
         }
       }
     }
@@ -59,8 +61,8 @@ export interface PromptInput {
 }
 
 export interface PromptOptions {
-  tools?: unknown;
-  toolChoice?: unknown;
+  tools?: ChatCompletionRequest["tools"];
+  toolChoice?: ChatCompletionRequest["tool_choice"];
 }
 
 /**
@@ -163,7 +165,7 @@ function toolCallsOf(message: ChatCompletionMessage): string[] {
   const lines: string[] = [];
   for (const call of message.tool_calls ?? []) {
     if (!isRecord(call)) continue;
-    const fn = isRecord(call.function) ? call.function : {};
+    const fn: Record<string, unknown> = isRecord(call.function) ? call.function : {};
     const name = typeof fn.name === "string" ? fn.name : "function";
     const args = typeof fn.arguments === "string" ? fn.arguments : "{}";
     const id = typeof call.id === "string" ? call.id : undefined;

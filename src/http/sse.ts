@@ -5,7 +5,7 @@ export function encodeSseEvent(data: unknown): string {
   return `data: ${payload.replace(/\n/g, "\ndata: ")}\n\n`;
 }
 
-export function sseResponse(events: AsyncIterable<unknown>): Response {
+export function sseResponse<T>(events: AsyncIterable<T>): Response {
   const encoder = new TextEncoder();
   const iterator = events[Symbol.asyncIterator]();
   let cancelled = false;

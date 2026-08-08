@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk";
 import { BadRequestError } from "../../http/errors.ts";
-import type { ChatCompletionMessage } from "../../openai/chat-completions.ts";
+import type {
+  ChatCompletionMessage,
+  ChatCompletionRequest,
+} from "../../openai/chat-completions.ts";
 import { toParts, toPrompt } from "./prompt.ts";
 import { renderToolSection } from "./tools.ts";
 
@@ -264,7 +267,7 @@ describe("toPrompt", () => {
   });
 
   test("appends tool instructions to the system prompt", () => {
-    const tools = [
+    const tools: NonNullable<ChatCompletionRequest["tools"]> = [
       {
         type: "function",
         function: {
@@ -287,7 +290,9 @@ describe("toPrompt", () => {
   });
 
   test("appends tool instructions after leading system messages", () => {
-    const tools = [{ type: "function", function: { name: "ping" } }];
+    const tools: NonNullable<ChatCompletionRequest["tools"]> = [
+      { type: "function", function: { name: "ping" } },
+    ];
     const prompt = toPrompt(
       [
         { role: "system", content: "be terse" },
@@ -299,13 +304,17 @@ describe("toPrompt", () => {
   });
 
   test("forbids tools when tool_choice is none", () => {
-    const tools = [{ type: "function", function: { name: "ping" } }];
+    const tools: NonNullable<ChatCompletionRequest["tools"]> = [
+      { type: "function", function: { name: "ping" } },
+    ];
     const prompt = toPrompt([{ role: "user", content: "hi" }], { tools, toolChoice: "none" });
-    expect(prompt.system).toContain("Do not use any custom userspace tools in this conversation.");
+    expect(prompt.system).toContain("Do not use any tools in this conversation.");
   });
 
   test("requires a tool when tool_choice is required", () => {
-    const tools = [{ type: "function", function: { name: "ping" } }];
+    const tools: NonNullable<ChatCompletionRequest["tools"]> = [
+      { type: "function", function: { name: "ping" } },
+    ];
     const prompt = toPrompt([{ role: "user", content: "hi" }], {
       tools,
       toolChoice: "required",
@@ -316,7 +325,7 @@ describe("toPrompt", () => {
   });
 
   test("requires a named tool when tool_choice names one", () => {
-    const tools = [
+    const tools: NonNullable<ChatCompletionRequest["tools"]> = [
       { type: "function", function: { name: "ping" } },
       { type: "function", function: { name: "pong" } },
     ];
@@ -330,7 +339,9 @@ describe("toPrompt", () => {
   });
 
   test("rejects tool_choice naming an unknown tool", () => {
-    const tools = [{ type: "function", function: { name: "ping" } }];
+    const tools: NonNullable<ChatCompletionRequest["tools"]> = [
+      { type: "function", function: { name: "ping" } },
+    ];
     expect(() =>
       toPrompt([{ role: "user", content: "hi" }], {
         tools,
@@ -342,21 +353,28 @@ describe("toPrompt", () => {
   });
 
   test("rejects malformed tool definitions", () => {
-    for (const tools of [
+    const malformed: Array<unknown> = [
       [42],
       [{ type: "other" }],
       [{ type: "function", function: {} }],
       [{ type: "function", function: { name: "" } }],
-    ]) {
-      expect(() => toPrompt([{ role: "user", content: "hi" }], { tools })).toThrow(
-        expect.objectContaining({ status: 400 }),
-      );
+    ];
+    for (const tools of malformed) {
+      expect(() =>
+        toPrompt([{ role: "user", content: "hi" }], {
+          tools: tools as unknown as ChatCompletionRequest["tools"],
+        }),
+      ).toThrow(expect.objectContaining({ status: 400 }));
     }
   });
 
   test("ignores tools that are empty or not arrays", () => {
     expect(toPrompt([{ role: "user", content: "hi" }], { tools: [] }).system).toBeUndefined();
-    expect(toPrompt([{ role: "user", content: "hi" }], { tools: "bogus" }).system).toBeUndefined();
+    expect(
+      toPrompt([{ role: "user", content: "hi" }], {
+        tools: "bogus" as unknown as ChatCompletionRequest["tools"],
+      }).system,
+    ).toBeUndefined();
   });
 
   test("rejects tool_choice without tools", () => {

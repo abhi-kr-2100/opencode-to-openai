@@ -32,7 +32,7 @@ describe("formatValidationError", () => {
 
 describe("streamWithDone", () => {
   test("yields chunks followed by SSE_DONE", async () => {
-    const chunks: unknown[] = [];
+    const chunks: Array<string | { b: number }> = [];
     for await (const chunk of streamWithDone(events())) {
       chunks.push(chunk);
     }
@@ -40,7 +40,7 @@ describe("streamWithDone", () => {
   });
 });
 
-async function* events(): AsyncGenerator<unknown> {
+async function* events(): AsyncGenerator<string | { b: number }> {
   yield "a";
   yield { b: 2 };
 }

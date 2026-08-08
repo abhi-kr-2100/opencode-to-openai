@@ -1,16 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { Part } from "@opencode-ai/sdk";
 import {
   assistantInfo,
-  collect,
   completionRequest,
   fakeClient,
-  idle,
-  partEvent,
   StreamMode,
-  textPart,
-  updated,
-  userInfo,
 } from "@/test-support/opencode.ts";
 import { OpencodeChatCompletionsService } from "./service.ts";
 
@@ -157,6 +150,15 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     });
   });
 
+  test("requires a prompt override before prompting the session", async () => {
+    const client = fakeClient({ create: { data: { id: "session-1" } } });
+    const service = new OpencodeChatCompletionsService(client);
+
+    expect(service.create(completionRequest(StreamMode.NonStreaming))).rejects.toThrow(
+      "fakeClient: overrides.prompt is required",
+    );
+  });
+
   test("maps prompt failures to 502", async () => {
     const client = fakeClient({
       create: { data: { id: "session-1" } },
@@ -186,156 +188,101 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
 });
 
 describe("OpencodeChatCompletionsService (stream)", () => {
-  test("forwards the system prompt when streaming", async () => {
+  test("emits a content chunk followed by an empty terminal finish chunk", async () => {
     const client = fakeClient({
       create: { data: { id: "session-1" } },
-      subscribe: (async function* () {
-        yield textPart("hi");
-        yield idle();
-      })(),
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [{ type: "text", id: "p1", sessionID: "s", messageID: "m", text: "hi there" }],
+        },
+      },
+    });
+    const service = new OpencodeChatCompletionsService(client);
+
+    const result = await service.create(completionRequest(StreamMode.Streaming));
+    if (result.stream === false) throw new Error("expected a streaming result");
+
+    expect(client.deleted).toBe(true);
+    const chunks = [];
+    for await (const chunk of result.value) chunks.push(chunk);
+
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]?.object).toBe("chat.completion.chunk");
+    expect(chunks[0]?.model).toBe("anthropic/claude-3-5-sonnet-20241022");
+    expect(chunks[0]?.choices[0]?.delta).toEqual({ role: "assistant", content: "" });
+    expect(chunks[0]?.choices[0]?.finish_reason).toBeNull();
+    expect(chunks[0]?.usage).toBeUndefined();
+    expect(chunks[1]?.choices[0]?.delta).toEqual({ content: "hi there" });
+    expect(chunks[1]?.choices[0]?.finish_reason).toBeNull();
+    expect(chunks[1]?.usage).toBeUndefined();
+    expect(chunks[2]?.choices[0]?.delta).toEqual({});
+    expect(chunks[2]?.choices[0]?.finish_reason).toBe("stop");
+
+    expect(client.calls).toHaveLength(1);
+    expect(client.calls[0]?.method).toBe("prompt");
+    expect(client.calls[0]?.body).toEqual({
+      model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      parts: [{ type: "text", text: "hi" }],
+    });
+    expect(client.deleted).toBe(true);
+  });
+
+  test("emits emulated tool calls as fragments and usage on a dedicated chunk", async () => {
+    const client = fakeClient({
+      create: { data: { id: "session-1" } },
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [
+            {
+              type: "text",
+              id: "p1",
+              sessionID: "s",
+              messageID: "m",
+              text: '<tool_call>{"name":"get_weather","arguments":{"city":"San Francisco","units":"celsius","humidity":85.4}}</tool_call>',
+            },
+          ],
+        },
+      },
     });
     const service = new OpencodeChatCompletionsService(client);
 
     const result = await service.create({
-      model: "anthropic/claude-3-5-sonnet-20241022",
-      messages: [
-        { role: "system", content: "be terse" },
-        { role: "user", content: "hi" },
-      ],
-      stream: true,
+      ...completionRequest(StreamMode.Streaming),
+      stream_options: { include_usage: true },
     });
     if (result.stream === false) throw new Error("expected a streaming result");
     const chunks = [];
     for await (const chunk of result.value) chunks.push(chunk);
 
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0]?.choices[0]?.delta.role).toBe("assistant");
-    expect(chunks[0]?.choices[0]?.delta.content).toBe("");
-    expect(chunks[1]?.choices[0]?.delta.content).toBe("hi");
-
-    expect(client.calls).toHaveLength(1);
-    expect(client.calls[0]?.method).toBe("promptAsync");
-    expect(client.calls[0]?.body).toMatchObject({
-      system: "be terse",
-      parts: [{ type: "text", text: "hi" }],
+    const rawArguments = '{"city":"San Francisco","units":"celsius","humidity":85.4}';
+    expect(chunks).toHaveLength(6);
+    expect(chunks[0]?.choices[0]?.delta).toEqual({ role: "assistant", content: "" });
+    const fragments = chunks.flatMap((chunk) => chunk.choices[0]?.delta.tool_calls ?? []);
+    expect(fragments).toHaveLength(3);
+    const [first, ...rest] = fragments;
+    expect(first).toMatchObject({
+      index: 0,
+      id: expect.stringMatching(/^call_/),
+      type: "function",
+      function: { name: "get_weather" },
     });
-  });
-
-  test("streams content deltas and a finish chunk", async () => {
-    const chunks = await collect([
-      textPart("Hel"),
-      textPart("lo"),
-      updated(assistantInfo({ finish: "end_turn" })),
-      idle(),
-    ]);
-
-    expect(chunks).toHaveLength(4);
-    expect(chunks[0]?.choices[0]?.delta.role).toBe("assistant");
-    expect(chunks[1]?.choices[0]?.delta.content).toBe("Hel");
-    expect(chunks[2]?.choices[0]?.delta.content).toBe("lo");
-    expect(chunks[3]?.choices[0]?.finish_reason).toBe("stop");
-    expect(chunks[3]?.choices[0]?.delta).toEqual({});
-  });
-
-  test("computes deltas from part text when no delta is provided", async () => {
-    const part: Part = {
-      id: "part-1",
-      sessionID: "session-1",
-      messageID: "message-1",
-      type: "text",
-      text: "Hello",
-    };
-    const chunks = await collect([
-      partEvent(part),
-      partEvent({ ...part, text: "Hello world" }),
-      idle(),
-    ]);
-
-    expect(chunks[1]?.choices[0]?.delta.content).toBe("Hello");
-    expect(chunks[2]?.choices[0]?.delta.content).toBe(" world");
-  });
-
-  test("strips tool call markup and streams tool call deltas", async () => {
-    const chunks = await collect([
-      textPart("Sure, <tool_c"),
-      textPart("all>"),
-      textPart('{"name":"get_weather","arguments":{"city": "SF"}}'),
-      textPart("</tool_call> done"),
-      updated(assistantInfo({ finish: "end_turn" })),
-      idle(),
-    ]);
-
-    const deltas = chunks.map((chunk) => chunk.choices[0]?.delta);
-    expect(deltas).toEqual([
-      { role: "assistant", content: "" },
-      { content: "Sure, " },
-      {
-        tool_calls: [
-          {
-            index: 0,
-            id: expect.stringMatching(/^call_/),
-            type: "function",
-            function: { name: "get_weather", arguments: '{"city":"SF"}' },
-          },
-        ],
-      },
-      { content: " done" },
-      {},
-    ]);
-    const finish = chunks.at(-1)?.choices[0];
-    expect(finish?.finish_reason).toBe("tool_calls");
-    expect(finish?.delta).toEqual({});
-  });
-
-  test("emits a plain stop finish when no tool calls were made", async () => {
-    const chunks = await collect([textPart("hi"), updated(assistantInfo()), idle()]);
-    expect(chunks.at(-1)?.choices[0]?.finish_reason).toBe("stop");
-  });
-
-  test("skips events from other sessions and non-text parts", async () => {
-    const foreign = textPart("ignored", "part-x", "other-session");
-    const reasoning = partEvent({
-      id: "part-r",
-      sessionID: "session-1",
-      messageID: "message-1",
-      type: "reasoning",
-      text: "thinking...",
-      time: { start: 0 },
-    });
-    const chunks = await collect([foreign, reasoning, textPart("kept"), idle()]);
-
-    expect(chunks).toHaveLength(2);
-    expect(chunks[1]?.choices[0]?.delta.content).toBe("kept");
-  });
-
-  test("skips non-assistant or incomplete message updates", async () => {
-    const chunks = await collect([
-      updated(userInfo()),
-      updated(assistantInfo({ time: { created: 0 } })),
-      textPart("kept"),
-      idle(),
-    ]);
-
-    expect(chunks).toHaveLength(2);
-    expect(chunks[1]?.choices[0]?.delta.content).toBe("kept");
-  });
-
-  test("flushes a held-back partial tag when the message completes", async () => {
-    const chunks = await collect([
-      textPart("kept <tool_c"),
-      updated(assistantInfo({ finish: "end_turn" })),
-      idle(),
-    ]);
-
-    expect(chunks).toHaveLength(4);
-    expect(chunks[1]?.choices[0]?.delta.content).toBe("kept ");
-    expect(chunks[2]?.choices[0]?.delta.content).toBe("<tool_c");
-    expect(chunks[3]?.choices[0]?.finish_reason).toBe("stop");
-  });
-
-  test("emits a usage chunk when include_usage is set", async () => {
-    const chunks = await collect([updated(assistantInfo()), idle()], true);
-
+    for (const fragment of rest) {
+      expect(fragment.id).toBeUndefined();
+      expect(fragment.type).toBeUndefined();
+      expect(fragment.function?.name).toBeUndefined();
+      expect(fragment.index).toBe(0);
+    }
+    expect(fragments.map((fragment) => fragment.function?.arguments ?? "").join("")).toBe(
+      rawArguments,
+    );
+    const finishChunk = chunks.find(
+      (chunk) => chunk.choices[0] !== undefined && chunk.choices[0]?.finish_reason !== null,
+    );
+    expect(finishChunk?.choices[0]?.delta).toEqual({});
+    expect(finishChunk?.choices[0]?.finish_reason).toBe("tool_calls");
+    expect(finishChunk?.usage).toBeUndefined();
     const usageChunk = chunks.at(-1);
     expect(usageChunk?.choices).toEqual([]);
     expect(usageChunk?.usage).toEqual({
@@ -345,68 +292,108 @@ describe("OpencodeChatCompletionsService (stream)", () => {
     });
   });
 
-  test("rejects when the session errors", async () => {
-    const chunks = collect([{ type: "session.error", properties: { sessionID: "session-1" } }]);
-    expect(chunks).rejects.toMatchObject({ status: 502 });
-  });
-
-  test("rejects when the stream ends before the session completes", async () => {
-    const chunks = collect([textPart("Hel")]);
-    expect(chunks).rejects.toMatchObject({
-      status: 502,
-      message: "opencode event stream ended before the session completed",
-    });
-  });
-
-  test("surfaces a prompt_async failure after the stream ends", async () => {
+  test("reconstructs a tool call whose arguments span many argument fragments", async () => {
     const client = fakeClient({
       create: { data: { id: "session-1" } },
-      promptAsync: new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("prompt failed")), 0);
-      }),
-      subscribe: (async function* () {
-        yield textPart("Hel");
-        yield idle();
-      })(),
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [
+            {
+              type: "text",
+              id: "p1",
+              sessionID: "s",
+              messageID: "m",
+              text: '<tool_call>{"name":"analyze_readings","arguments":{"sensor":"temperature-humidity-0092","samples":{"cells":[22.4,22.6,22.8,22.9,23.1,23.44],"unit":"celsius"},"note":"calibrated against the reference station"}}</tool_call>',
+            },
+          ],
+        },
+      },
     });
     const service = new OpencodeChatCompletionsService(client);
-    const result = await service.create(completionRequest(StreamMode.Streaming));
-    if (result.stream === false) throw new Error("expected a streaming result");
-    const chunks = [];
-    const consume = (async () => {
-      for await (const chunk of result.value) chunks.push(chunk);
-    })();
-    expect(consume).rejects.toThrow("prompt failed");
-    expect(chunks.length).toBeGreaterThan(0);
-  });
 
-  test("ignores session deletion failures during streaming", async () => {
-    const client = fakeClient({
-      create: { data: { id: "session-1" } },
-      delete: { error: { name: "NotFoundError" } },
-      subscribe: (async function* () {
-        yield textPart("kept");
-        yield idle();
-      })(),
-    });
-    const service = new OpencodeChatCompletionsService(client);
     const result = await service.create(completionRequest(StreamMode.Streaming));
     if (result.stream === false) throw new Error("expected a streaming result");
     const chunks = [];
     for await (const chunk of result.value) chunks.push(chunk);
-    expect(chunks).toHaveLength(2);
+
+    const rawArguments =
+      '{"sensor":"temperature-humidity-0092","samples":{"cells":[22.4,22.6,22.8,22.9,23.1,23.44],"unit":"celsius"},"note":"calibrated against the reference station"}';
+    const fragments = chunks.flatMap((chunk) => chunk.choices[0]?.delta.tool_calls ?? []);
+    expect(fragments.length).toBeGreaterThan(1);
+    expect(fragments[0]).toMatchObject({
+      index: 0,
+      id: expect.stringMatching(/^call_/),
+      type: "function",
+      function: { name: "analyze_readings" },
+    });
+    for (const fragment of fragments.slice(1)) {
+      expect(fragment.id).toBeUndefined();
+      expect(fragment.type).toBeUndefined();
+      expect(fragment.function?.name).toBeUndefined();
+      expect(fragment.index).toBe(0);
+    }
+    expect(fragments.map((fragment) => fragment.function?.arguments ?? "").join("")).toBe(
+      rawArguments,
+    );
   });
 
-  test("deletes the session when event subscription fails during stream setup", async () => {
+  test("opens the stream with a role-only chunk before the content chunk", async () => {
     const client = fakeClient({
       create: { data: { id: "session-1" } },
-      subscribe: { error: new Error("subscribe failed") },
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [{ type: "text", id: "p1", sessionID: "s", messageID: "m", text: "hi there" }],
+        },
+      },
     });
     const service = new OpencodeChatCompletionsService(client);
 
-    expect(service.create(completionRequest(StreamMode.Streaming))).rejects.toMatchObject({
-      status: 502,
+    const result = await service.create(completionRequest(StreamMode.Streaming));
+    if (result.stream === false) throw new Error("expected a streaming result");
+    const chunks = [];
+    for await (const chunk of result.value) chunks.push(chunk);
+
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]?.choices[0]?.delta).toEqual({ role: "assistant", content: "" });
+    expect(chunks[0]?.choices[0]?.finish_reason).toBeNull();
+    expect(chunks[1]?.choices[0]?.delta).toEqual({ content: "hi there" });
+    expect(chunks[1]?.choices[0]?.delta.role).toBeUndefined();
+    expect(chunks[2]?.choices[0]?.delta).toEqual({});
+    expect(chunks[2]?.choices[0]?.finish_reason).toBe("stop");
+  });
+
+  test("ends an include_usage stream with a dedicated usage chunk", async () => {
+    const client = fakeClient({
+      create: { data: { id: "session-1" } },
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [{ type: "text", id: "p1", sessionID: "s", messageID: "m", text: "hi there" }],
+        },
+      },
     });
-    expect(client.deleted).toBe(true);
+    const service = new OpencodeChatCompletionsService(client);
+
+    const result = await service.create({
+      ...completionRequest(StreamMode.Streaming),
+      stream_options: { include_usage: true },
+    });
+    if (result.stream === false) throw new Error("expected a streaming result");
+    const chunks = [];
+    for await (const chunk of result.value) chunks.push(chunk);
+
+    const usageChunk = chunks.at(-1);
+    expect(usageChunk?.choices).toEqual([]);
+    expect(usageChunk?.usage).toEqual({
+      prompt_tokens: 14,
+      completion_tokens: 7,
+      total_tokens: 21,
+    });
+    const finishChunk = chunks.find(
+      (chunk) => chunk.choices[0] !== undefined && chunk.choices[0]?.finish_reason !== null,
+    );
+    expect(finishChunk?.usage).toBeUndefined();
   });
 });

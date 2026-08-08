@@ -1,17 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderToolSection, splitToolCalls, ToolCallSplitter } from "./tools.ts";
-
-/** Runs a sequence of deltas through a fresh splitter, tagging each output. */
-function split(deltas: string[]): string[] {
-  const splitter = new ToolCallSplitter();
-  const outputs: string[] = [];
-  for (const delta of deltas) {
-    for (const output of splitter.push(delta)) {
-      outputs.push(output.kind === "text" ? `text:${output.text}` : `call:${output.payload}`);
-    }
-  }
-  return outputs;
-}
+import { renderToolSection, splitToolCalls } from "./tools.ts";
 
 describe("renderToolSection", () => {
   test("renders undefined without tools", () => {
@@ -49,6 +37,52 @@ describe("renderToolSection", () => {
     );
     expect(section).toContain("- name: a");
     expect(section).toContain("- name: b");
+  });
+
+  test("returns only a no-tools directive for none", () => {
+    const section = renderToolSection(
+      [{ type: "function", function: { name: "get_weather" } }],
+      "none",
+    );
+    expect(section).toBe("Do not use any tools in this conversation.");
+  });
+
+  test("rejects a function tool_choice without a name", () => {
+    expect(() =>
+      renderToolSection([{ type: "function", function: { name: "get_weather" } }], {
+        type: "function",
+      } as unknown as Parameters<typeof renderToolSection>[1]),
+    ).toThrow(
+      expect.objectContaining({
+        status: 400,
+        message: expect.stringContaining("must name a function"),
+      }),
+    );
+  });
+
+  test("rejects a function tool_choice naming an unknown tool", () => {
+    expect(() =>
+      renderToolSection([{ type: "function", function: { name: "get_weather" } }], {
+        type: "function",
+        function: { name: "nope" },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        status: 400,
+        message: expect.stringContaining("names an unknown tool"),
+      }),
+    );
+  });
+
+  test("rejects a non-function tool_choice", () => {
+    expect(() =>
+      renderToolSection([{ type: "function", function: { name: "get_weather" } }], "random"),
+    ).toThrow(
+      expect.objectContaining({
+        status: 400,
+        message: expect.stringContaining("invalid tool_choice"),
+      }),
+    );
   });
 });
 
@@ -88,6 +122,41 @@ describe("splitToolCalls", () => {
     expect(calls).toEqual([{ name: "a", arguments: '{"x":1}' }]);
   });
 
+  test("ignores a closing delimiter inside a string argument", () => {
+    const { content, calls } = splitToolCalls(
+      '<tool_call>{"name":"a","arguments":{"note":"see </tool_call> text"}}</tool_call>',
+    );
+    expect(content).toBe("");
+    expect(calls).toEqual([{ name: "a", arguments: '{"note":"see </tool_call> text"}' }]);
+  });
+
+  test("honors escaped quotes and backslashes when scanning for the delimiter", () => {
+    const { content, calls } = splitToolCalls(
+      '<tool_call>{"name":"a","arguments":{"note":"a \\"quote\\" and \\\\ then </tool_call> text"}}</tool_call>',
+    );
+    expect(content).toBe("");
+    expect(calls).toEqual([
+      {
+        name: "a",
+        arguments: '{"note":"a \\"quote\\" and \\\\ then </tool_call> text"}',
+      },
+    ]);
+  });
+
+  test("treats a reply whose only delimiter is inside a string as incomplete", () => {
+    expect(splitToolCalls('<tool_call>{"name":"a","arg":"x</tool_call>"}')).toEqual({
+      content: '<tool_call>{"name":"a","arg":"x</tool_call>"}',
+      calls: [],
+    });
+  });
+
+  test("coerces non-object arguments to empty JSON", () => {
+    expect(splitToolCalls('<tool_call>{"name":"a","arguments":42}</tool_call>')).toEqual({
+      content: "",
+      calls: [{ name: "a", arguments: "{}" }],
+    });
+  });
+
   test("keeps malformed blocks in the content", () => {
     expect(splitToolCalls("hi <tool_call>oops}</tool_call> bye")).toEqual({
       content: "hi <tool_call>oops}</tool_call> bye",
@@ -101,66 +170,19 @@ describe("splitToolCalls", () => {
       calls: [],
     });
   });
-});
 
-describe("ToolCallSplitter", () => {
-  test("passes text through", () => {
-    expect(split(["Hel", "lo world"])).toEqual(["text:Hel", "text:lo world"]);
-  });
-
-  test("parses a block split across arbitrary chunk boundaries", () => {
-    expect(
-      split([
-        "Sure, <tool_call>",
-        '{"name":"get_weather","arguments":{"city":"SF"}}',
-        "</tool_call>",
-        " done",
-      ]),
-    ).toEqual([
-      "text:Sure, ",
-      'call:{"name":"get_weather","arguments":{"city":"SF"}}',
-      "text: done",
-    ]);
-  });
-
-  test("parses multiple blocks and interleaved text", () => {
-    expect(
-      split([
-        '<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>',
-        ' and <tool_call>{"name":"b","arguments":{"y":2}}</tool_call>',
-      ]),
-    ).toEqual([
-      'call:{"name":"a","arguments":{"x":1}}',
-      "text: and ",
-      'call:{"name":"b","arguments":{"y":2}}',
-    ]);
-  });
-
-  test("holds a literal tag-looking prefix and flushes it when it diverges", () => {
-    const outputs = split(["text <tool_call nope", ", really"]);
-    expect(outputs.filter((output) => output.startsWith("call:"))).toEqual([]);
-    expect(outputs.map((output) => output.slice("text:".length)).join("")).toBe(
-      "text <tool_call nope, really",
-    );
-  });
-
-  test("holds a partial opening tag until the tag completes", () => {
-    expect(
-      split(["a <tool", "_call", ">", '{"name":"x","arguments":{"n":1}}', "</tool_call>", " b"]),
-    ).toEqual(["text:a ", 'call:{"name":"x","arguments":{"n":1}}', "text: b"]);
-  });
-
-  test("flushes an unclosed block as text", () => {
-    const splitter = new ToolCallSplitter();
-    expect(splitter.push('<tool_call>{"name":"a","arguments":{"x":1}}')).toEqual([]);
-    expect(splitter.flush()).toEqual([
-      { kind: "text", text: '<tool_call>{"name":"a","arguments":{"x":1}}' },
-    ]);
-  });
-
-  test("flushes trailing held text", () => {
-    const splitter = new ToolCallSplitter();
-    expect(splitter.push("hello <tool_c")).toEqual([{ kind: "text", text: "hello " }]);
-    expect(splitter.flush()).toEqual([{ kind: "text", text: "<tool_c" }]);
+  test("falls back to empty arguments when serializing them fails", () => {
+    const original = JSON.stringify;
+    (JSON as { stringify: typeof original }).stringify = () => {
+      throw new Error("circular");
+    };
+    try {
+      expect(splitToolCalls('<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>')).toEqual({
+        content: "",
+        calls: [{ name: "a", arguments: "{}" }],
+      });
+    } finally {
+      (JSON as { stringify: typeof original }).stringify = original;
+    }
   });
 });
