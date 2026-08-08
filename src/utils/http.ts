@@ -14,7 +14,7 @@ export function formatValidationError(issues: z.core.$ZodIssue[]): string {
   return issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
 }
 
-export async function* streamWithDone(chunks: AsyncIterable<unknown>) {
+export async function* streamWithDone<T>(chunks: AsyncIterable<T>): AsyncGenerator<T | string> {
   for await (const chunk of chunks) {
     yield chunk;
   }

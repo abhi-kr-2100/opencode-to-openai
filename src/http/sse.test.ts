@@ -13,12 +13,12 @@ async function streamToText(response: Response): Promise<string> {
   return text + decoder.decode();
 }
 
-async function* framedEvents(): AsyncGenerator<unknown> {
+async function* framedEvents(): AsyncGenerator<string | { type: string; content: string }> {
   yield { type: "text", content: "hi" };
   yield "plain";
 }
 
-async function* failingEvents(): AsyncGenerator<unknown> {
+async function* failingEvents(): AsyncGenerator<string> {
   yield "a";
   throw new Error("boom");
 }
@@ -31,7 +31,7 @@ async function* failingEvents(): AsyncGenerator<unknown> {
  * consumer started reading and `releasedIds()` which ones were canceled.
  */
 function pendingSource(): {
-  source: AsyncIterable<unknown>;
+  source: AsyncIterable<never>;
   begunIds: () => number[];
   releasedIds: () => number[];
 } {
@@ -70,7 +70,7 @@ function pendingSource(): {
   };
 }
 
-function infiniteEvents(): { events: AsyncIterable<unknown>; returned: () => boolean } {
+function infiniteEvents(): { events: AsyncIterable<string>; returned: () => boolean } {
   let returned = false;
   return {
     events: {

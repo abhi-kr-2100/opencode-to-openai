@@ -1,11 +1,53 @@
 import { z } from "zod";
 
+/** An arbitrary JSON object for open-ended content like JSON Schemas. */
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+
+/** A text content part in a message's `content` array. */
+const textContentPartSchema = z.object({ type: z.literal("text"), text: z.string() }).loose();
+
+/** An image content part in a message's `content` array. */
+const imageUrlContentPartSchema = z.object({
+  type: z.literal("image_url"),
+  image_url: z.object({ url: z.string(), detail: z.string().optional() }).loose(),
+});
+
+/** The content part shapes this server can turn into opencode parts. */
+const contentPartSchema = z.union([textContentPartSchema, imageUrlContentPartSchema]);
+
+/** A tool invocation attached to an assistant message. */
+const toolCallSchema = z
+  .object({
+    id: z.string().optional(),
+    type: z.literal("function").optional(),
+    function: z.object({ name: z.string(), arguments: z.string().optional() }).loose().optional(),
+  })
+  .loose();
+
+/** A caller-supplied tool definition. */
+const toolSchema = z.object({
+  type: z.literal("function"),
+  function: z
+    .object({
+      name: z.string(),
+      description: z.string().optional(),
+      parameters: jsonObjectSchema.optional(),
+    })
+    .loose(),
+});
+
+/** A `tool_choice` naming a specific function. */
+const toolChoiceFunctionSchema = z.object({
+  type: z.literal("function"),
+  function: z.object({ name: z.string() }).loose(),
+});
+
 export const chatMessageSchema = z.object({
   role: z.enum(["system", "developer", "user", "assistant", "tool"]),
-  content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]).nullish(),
+  content: z.union([z.string(), z.array(contentPartSchema)]).nullish(),
   name: z.string().optional(),
   tool_call_id: z.string().optional(),
-  tool_calls: z.array(z.record(z.string(), z.unknown())).optional(),
+  tool_calls: z.array(toolCallSchema).optional(),
 });
 
 export const chatCompletionRequestSchema = z
@@ -24,12 +66,12 @@ export const chatCompletionRequestSchema = z
     response_format: z
       .object({
         type: z.enum(["text", "json_object"]),
-        json_schema: z.record(z.string(), z.unknown()).optional(),
+        json_schema: jsonObjectSchema.optional(),
       })
       .optional(),
     stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
-    tools: z.array(z.record(z.string(), z.unknown())).optional(),
-    tool_choice: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    tools: z.array(toolSchema).optional(),
+    tool_choice: z.union([z.string(), toolChoiceFunctionSchema]).optional(),
   })
   // Unknown fields are tolerated so forward-compatible OpenAI request shapes don't break us.
   .loose();

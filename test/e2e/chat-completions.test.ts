@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { ChatCompletion, ChatCompletionChunk } from "../../src/openai/chat-completions.ts";
+import type {
+  ChatCompletion,
+  ChatCompletionChunk,
+  ChatCompletionRequest,
+} from "../../src/openai/chat-completions.ts";
 import { createOpencodeHttpClient } from "../../src/opencode/client.ts";
 import { OpencodeChatCompletionsService } from "../../src/services/opencode/service.ts";
 import { E2E_MODEL, startOpencode, type TestOpencode } from "./support/opencode.ts";
@@ -7,18 +11,18 @@ import { postJson } from "./support/requests.ts";
 import { startServer } from "./support/server.ts";
 const PROMPT = "Reply with exactly one word: pong";
 
-function completionBody(extra: Record<string, unknown> = {}): RequestInit {
+function completionBody(extra: Partial<ChatCompletionRequest> = {}): RequestInit {
   return postJson({ model: E2E_MODEL, messages: [{ role: "user", content: PROMPT }], ...extra });
 }
 
-function parseSseEvents(text: string): unknown[] {
+function parseSseEvents(text: string): Array<string | ChatCompletionChunk> {
   return text
     .split("\n\n")
     .map((block) => block.match(/^data: (.*)$/))
     .filter((match): match is RegExpMatchArray => match !== null)
     .map((match) => {
       const payload = match[1]!;
-      return payload === "[DONE]" ? "[DONE]" : JSON.parse(payload);
+      return payload === "[DONE]" ? "[DONE]" : (JSON.parse(payload) as ChatCompletionChunk);
     });
 }
 
@@ -61,7 +65,7 @@ describe("e2e POST /v1/chat/completions (real opencode server)", () => {
   );
 
   test(
-    "streams the real opencode server's output as SSE chunks",
+    "streams the completion in OpenAI's chunk layout",
     async () => {
       const baseUrl = proxyBaseUrl();
       const response = await fetch(
@@ -73,18 +77,33 @@ describe("e2e POST /v1/chat/completions (real opencode server)", () => {
       expect(response.headers.get("content-type")).toBe("text/event-stream");
       const events = parseSseEvents(await response.text());
       expect(events.at(-1)).toBe("[DONE]");
-      const chunks = events.slice(0, -1) as ChatCompletionChunk[];
-      expect(chunks.length).toBeGreaterThan(0);
-      expect(chunks[0]?.choices[0]?.delta.role).toBe("assistant");
+      const chunks = events.filter(
+        (event): event is ChatCompletionChunk => typeof event !== "string",
+      );
+      expect(chunks.length).toBeGreaterThanOrEqual(3);
+
+      const first = chunks[0]!;
+      expect(first.object).toBe("chat.completion.chunk");
+      expect(first.choices[0]?.delta).toEqual({ role: "assistant", content: "" });
+      expect(first.choices[0]?.finish_reason).toBeNull();
+
       const content = chunks
-        .flatMap((chunk) => chunk.choices.map((choice) => choice.delta.content ?? ""))
+        .flatMap((chunk) => chunk.choices.flatMap((choice) => choice.delta.content ?? ""))
         .join("");
       expect(content.length).toBeGreaterThan(0);
-      const finish = chunks.find((chunk) => chunk.choices[0]?.finish_reason !== null);
-      const finishReason = finish?.choices[0]?.finish_reason ?? null;
-      expect(finishReason === "stop" || finishReason === "length").toBe(true);
-      const usage = chunks.find((chunk) => chunk.usage !== undefined);
-      expect(usage?.usage?.total_tokens).toBeGreaterThan(0);
+
+      const finish = chunks.find(
+        (chunk) => chunk.choices[0] !== undefined && chunk.choices[0]?.finish_reason !== null,
+      );
+      expect(finish?.choices[0]?.delta).toEqual({});
+      expect(
+        finish?.choices[0]?.finish_reason === "stop" ||
+          finish?.choices[0]?.finish_reason === "length",
+      ).toBe(true);
+
+      const usageChunk = chunks.at(-1);
+      expect(usageChunk?.choices).toEqual([]);
+      expect(usageChunk?.usage?.total_tokens).toBeGreaterThan(0);
     },
     { timeout: 60_000 },
   );

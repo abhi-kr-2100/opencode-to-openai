@@ -1,38 +1,50 @@
-import type { AssistantMessage, Event, Message, Part } from "@opencode-ai/sdk";
+import type {
+  AssistantMessage,
+  Session,
+  SessionPromptData,
+  SessionPromptResponse,
+} from "@opencode-ai/sdk";
 import type { ChatCompletionRequest } from "@/openai/chat-completions.ts";
 import type { OpencodeClient } from "@/opencode/client.ts";
-import { OpencodeChatCompletionsService } from "@/services/opencode/service.ts";
 
 export enum StreamMode {
   Streaming = "streaming",
   NonStreaming = "non-streaming",
 }
 
+interface OkResult<T> {
+  data: T;
+}
+
 interface ErrorResult {
   error: unknown;
 }
+
+/** A value the fake resolves as-is, or an error wrapper it rethrows. */
+type FakeResult<T> = OkResult<T> | ErrorResult;
 
 function isErrorResult(value: unknown): value is ErrorResult {
   return typeof value === "object" && value !== null && "error" in value;
 }
 
-async function resolve(value: unknown): Promise<unknown> {
+async function resolve<T>(value: OkResult<T> | ErrorResult | Promise<T>): Promise<OkResult<T>> {
   if (isErrorResult(value)) throw value.error;
-  return value;
+  const data = value instanceof Promise ? await value : value.data;
+  return { data };
 }
 
 interface FakeClient extends OpencodeClient {
-  calls: { method: "prompt" | "promptAsync"; body: unknown }[];
+  calls: { method: "prompt"; body: SessionPromptData["body"] }[];
   deleted: boolean;
 }
 
-export function fakeClient(overrides: {
-  create?: unknown;
-  prompt?: unknown;
-  promptAsync?: unknown;
-  subscribe?: AsyncGenerator<Event> | { error: unknown };
-  delete?: unknown;
-}): FakeClient {
+export function fakeClient(
+  overrides: {
+    create?: FakeResult<Pick<Session, "id">>;
+    prompt?: FakeResult<SessionPromptResponse>;
+    delete?: FakeResult<boolean>;
+  } = {},
+): FakeClient {
   const calls: FakeClient["calls"] = [];
   let deleted = false;
   return {
@@ -42,23 +54,17 @@ export function fakeClient(overrides: {
     },
     session: {
       create: () => resolve(overrides.create ?? { data: { id: "session-1" } }),
-      prompt: (options: unknown) => {
-        calls.push({ method: "prompt", body: (options as { body: unknown }).body });
+      prompt: (options: { body: SessionPromptData["body"] }) => {
+        calls.push({ method: "prompt", body: options.body });
+        if (overrides.prompt === undefined) {
+          throw new Error("fakeClient: overrides.prompt is required to call session.prompt");
+        }
         return resolve(overrides.prompt);
-      },
-      promptAsync: (options: unknown) => {
-        calls.push({ method: "promptAsync", body: (options as { body: unknown }).body });
-        return resolve(overrides.promptAsync ?? { data: undefined });
       },
       delete: () => {
         deleted = true;
         return resolve(overrides.delete ?? { data: true });
       },
-    },
-    event: {
-      subscribe: async () => ({
-        stream: (await resolve(overrides.subscribe ?? {})) as AsyncGenerator<Event>,
-      }),
     },
   } as unknown as FakeClient;
 }
@@ -80,62 +86,10 @@ export function assistantInfo(overrides: Partial<AssistantMessage> = {}): Assist
   };
 }
 
-export function textPart(text: string, id = "part-1", sessionID = "session-1"): Event {
-  return {
-    type: "message.part.updated",
-    properties: {
-      part: { id, sessionID, messageID: "message-1", type: "text", text },
-      delta: text,
-    },
-  };
-}
-
-export function partEvent(part: Part, delta?: string): Event {
-  return { type: "message.part.updated", properties: { part, delta } };
-}
-
-export function updated(info: Message): Event {
-  return { type: "message.updated", properties: { info } };
-}
-
-export function userInfo(): Message {
-  return {
-    id: "user-1",
-    sessionID: "session-1",
-    role: "user",
-    time: { created: 0 },
-    agent: "test",
-    model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
-  };
-}
-
-export function idle(): Event {
-  return { type: "session.idle", properties: { sessionID: "session-1" } };
-}
-
 export function completionRequest(stream: StreamMode): ChatCompletionRequest {
   return {
     model: "anthropic/claude-3-5-sonnet-20241022",
     messages: [{ role: "user", content: "hi" }],
     stream: stream === StreamMode.Streaming,
   };
-}
-
-/** Runs a sequence of events through a fresh service, collecting the chunks. */
-export async function collect(events: Event[], includeUsage = false) {
-  const client = fakeClient({
-    create: { data: { id: "session-1" } },
-    subscribe: (async function* () {
-      for (const event of events) yield event;
-    })(),
-  });
-  const service = new OpencodeChatCompletionsService(client);
-  const result = await service.create({
-    ...completionRequest(StreamMode.Streaming),
-    stream_options: { include_usage: includeUsage },
-  });
-  if (result.stream === false) throw new Error("expected a streaming result");
-  const chunks = [];
-  for await (const chunk of result.value) chunks.push(chunk);
-  return chunks;
 }
