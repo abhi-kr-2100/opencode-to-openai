@@ -190,18 +190,31 @@ describe("toPrompt", () => {
     });
   });
 
-  test("drops unknown roles from the transcript", () => {
+  test("rejects unknown roles instead of dropping them", () => {
     const messages = [
       { role: "user", content: "first" },
       { role: "function", content: "weird" },
       { role: "user", content: "second" },
     ];
-    expect(toPrompt(messages as unknown as ChatCompletionMessage[])).toEqual({
-      parts: [
-        { type: "text", text: "user: first" },
-        { type: "text", text: "second" },
-      ],
-    });
+    expect(() => toPrompt(messages as unknown as ChatCompletionMessage[])).toThrow(
+      expect.objectContaining({
+        status: 400,
+        message: expect.stringMatching(/unsupported message role/),
+      }),
+    );
+  });
+
+  test("rejects an unknown role in the last message instead of dropping it", () => {
+    const messages = [
+      { role: "user", content: "first" },
+      { role: "function", content: "weird" },
+    ];
+    expect(() => toPrompt(messages as unknown as ChatCompletionMessage[])).toThrow(
+      expect.objectContaining({
+        status: 400,
+        message: expect.stringMatching(/unsupported message role/),
+      }),
+    );
   });
 
   test("omits the transcript for a single user message", () => {

@@ -109,10 +109,12 @@ export function toPrompt(
   }
 
   const lastIndex = conversation.length - 1;
+  const lastMessage = conversation[lastIndex]!;
+  assertSupportedRole(lastMessage.role);
   const transcript = flattenTranscript(conversation, lastIndex);
   const parts: Array<TextPartInput | FilePartInput> = [];
   if (transcript !== undefined) parts.push({ type: "text", text: transcript });
-  const lastParts = toParts([conversation[lastIndex]!]);
+  const lastParts = toParts([lastMessage]);
   if (lastParts.length === 0) {
     throw new BadRequestError("the last message must carry some content");
   }
@@ -156,8 +158,22 @@ function transcriptText(message: ChatCompletionMessage): string {
     case "tool":
       return `tool${message.tool_call_id ? ` (${message.tool_call_id})` : ""}: ${text}`;
     default:
-      return "";
+      throw unsupportedRoleError(message.role);
   }
+}
+
+/** Rejects messages whose role is outside the known set. */
+function assertSupportedRole(role: ChatCompletionMessage["role"] | undefined): void {
+  if (!isSystemRole(role) && role !== "user" && role !== "assistant" && role !== "tool") {
+    throw unsupportedRoleError(role);
+  }
+}
+
+/** Builds the 400 error for a message role outside the known set. */
+function unsupportedRoleError(role: ChatCompletionMessage["role"] | undefined): BadRequestError {
+  return new BadRequestError(
+    `unsupported message role ${JSON.stringify(role)} (expected one of system, developer, user, assistant, tool)`,
+  );
 }
 
 /** Renders the tool calls attached to an assistant message as emulated blocks. */
