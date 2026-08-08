@@ -250,14 +250,38 @@ describe("toPrompt", () => {
     });
   });
 
-  test("rejects a system message after the user message", () => {
+  test("allows a system message after a user message", () => {
     const messages = [
       { role: "user", content: "hi" },
       { role: "system", content: "late" },
     ];
-    expect(() => toPrompt(messages as ChatCompletionMessage[])).toThrow(
-      expect.objectContaining({ status: 400, message: expect.stringContaining("come first") }),
-    );
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      system: "late",
+      parts: [{ type: "text", text: "hi" }],
+    });
+  });
+
+  test("allows a developer message after a user message", () => {
+    const messages = [
+      { role: "user", content: "hi" },
+      { role: "developer", content: "late" },
+    ];
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      system: "late",
+      parts: [{ type: "text", text: "hi" }],
+    });
+  });
+
+  test("carries system messages after a user message in the system field", () => {
+    const messages = [
+      { role: "system", content: "first" },
+      { role: "user", content: "hi" },
+      { role: "system", content: "late" },
+    ];
+    expect(toPrompt(messages as ChatCompletionMessage[])).toEqual({
+      system: "first\n\nlate",
+      parts: [{ type: "text", text: "hi" }],
+    });
   });
 
   test("rejects requests without a user message", () => {

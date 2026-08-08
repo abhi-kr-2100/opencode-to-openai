@@ -68,7 +68,7 @@ export interface PromptOptions {
 /**
  * Maps OpenAI chat messages onto an opencode session prompt.
  *
- * Leading `system`/`developer` instructions are carried in the prompt's
+ * `system`/`developer` instructions are carried in the prompt's
  * `system` field, followed by the emulated tool instructions when tools were
  * requested. The final message becomes the prompt's parts — whether it is a
  * user turn or a `tool` result continuing an agent loop. Any preceding
@@ -81,19 +81,13 @@ export function toPrompt(
   options: PromptOptions = {},
 ): PromptInput {
   const system: string[] = [];
-  let index = 0;
-  while (index < messages.length && isSystemRole(messages[index]?.role)) {
-    const text = contentText(messages[index]!);
-    if (text !== undefined && text.length > 0) system.push(text);
-    index += 1;
-  }
-
-  const conversation = messages.slice(index);
-  for (const message of conversation) {
+  const conversation: ChatCompletionMessage[] = [];
+  for (const message of messages) {
     if (isSystemRole(message.role)) {
-      throw new BadRequestError(
-        `a ${message.role} message cannot follow a user message: system instructions must come first`,
-      );
+      const text = contentText(message);
+      if (text !== undefined && text.length > 0) system.push(text);
+    } else {
+      conversation.push(message);
     }
   }
 
