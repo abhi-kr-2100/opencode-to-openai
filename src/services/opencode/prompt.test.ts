@@ -237,14 +237,41 @@ describe("toPrompt", () => {
     });
   });
 
-  test("rejects a system message after the user message", () => {
-    const messages = [
-      { role: "user", content: "hi" },
-      { role: "system", content: "late" },
-    ];
-    expect(() => toPrompt(messages as ChatCompletionMessage[])).toThrow(
-      expect.objectContaining({ status: 400, message: expect.stringContaining("come first") }),
-    );
+  test("allows system messages after user messages", () => {
+    expect(
+      toPrompt([
+        { role: "user", content: "hi" },
+        { role: "system", content: "late" },
+      ]),
+    ).toEqual({
+      system: "late",
+      parts: [{ type: "text", text: "hi" }],
+    });
+    expect(
+      toPrompt([
+        { role: "user", content: "first" },
+        { role: "system", content: "mid" },
+        { role: "user", content: "second" },
+      ]),
+    ).toEqual({
+      system: "mid",
+      parts: [
+        { type: "text", text: "user: first" },
+        { type: "text", text: "second" },
+      ],
+    });
+  });
+
+  test("allows developer messages after user messages", () => {
+    expect(
+      toPrompt([
+        { role: "user", content: "hi" },
+        { role: "developer", content: "late" },
+      ]),
+    ).toEqual({
+      system: "late",
+      parts: [{ type: "text", text: "hi" }],
+    });
   });
 
   test("rejects requests without a user message", () => {

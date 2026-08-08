@@ -89,13 +89,20 @@ export function toPrompt(
   }
 
   const conversation = messages.slice(index);
+  const turns: ChatCompletionMessage[] = [];
   for (const message of conversation) {
+    if (isSystemRole(message.role)) {
+      const text = contentText(message);
+      if (text !== undefined && text.length > 0) system.push(text);
+      continue;
+    }
     assertConversationRole(message.role);
+    turns.push(message);
   }
 
   let lastUserIndex = -1;
-  for (let i = conversation.length - 1; i >= 0; i -= 1) {
-    if (conversation[i]?.role === "user") {
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    if (turns[i]?.role === "user") {
       lastUserIndex = i;
       break;
     }
@@ -104,11 +111,11 @@ export function toPrompt(
     throw new BadRequestError("a user message is required");
   }
 
-  const lastIndex = conversation.length - 1;
-  const transcript = flattenTranscript(conversation, lastIndex);
+  const lastIndex = turns.length - 1;
+  const transcript = flattenTranscript(turns, lastIndex);
   const parts: Array<TextPartInput | FilePartInput> = [];
   if (transcript !== undefined) parts.push({ type: "text", text: transcript });
-  const lastParts = toParts([conversation[lastIndex]!]);
+  const lastParts = toParts([turns[lastIndex]!]);
   if (lastParts.length === 0) {
     throw new BadRequestError("the last message must carry some content");
   }
@@ -175,11 +182,6 @@ function isSystemRole(role: ChatCompletionMessage["role"] | undefined): boolean 
 function assertConversationRole(
   role: ChatCompletionMessage["role"] | undefined,
 ): asserts role is "user" | "assistant" | "tool" {
-  if (isSystemRole(role)) {
-    throw new BadRequestError(
-      `a ${role} message cannot follow a user message: system instructions must come first`,
-    );
-  }
   if (role !== "user" && role !== "assistant" && role !== "tool") {
     throw new BadRequestError(`unsupported message role ${JSON.stringify(role)}`);
   }
