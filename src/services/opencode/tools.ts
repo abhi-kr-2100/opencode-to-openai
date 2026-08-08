@@ -208,11 +208,14 @@ export function parseToolCallPayload(raw: string): ParsedToolCall | null {
   if (!isRecord(payload)) return null;
   const name = typeof payload.name === "string" ? payload.name : "";
   if (name.length === 0) return null;
-  return { name, arguments: argumentsJson(payload.arguments) ?? "{}" };
+  const args = argumentsJson(payload.arguments);
+  if (args === null) return null;
+  return { name, arguments: args };
 }
 
 /** Coerces a call's arguments into a JSON string, accepting objects and strings. */
 function argumentsJson(value: unknown): string | null {
+  if (value === undefined) return "{}";
   if (typeof value === "string") return value;
   if (isRecord(value) || Array.isArray(value)) {
     try {
@@ -221,7 +224,7 @@ function argumentsJson(value: unknown): string | null {
       return null;
     }
   }
-  return null;
+  return "{}";
 }
 
 /** A unique id for a tool call, matching the `call_…` shape clients expect. */
