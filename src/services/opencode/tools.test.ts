@@ -171,15 +171,15 @@ describe("splitToolCalls", () => {
     });
   });
 
-  test("falls back to empty arguments when serializing them fails", () => {
+  test("keeps tool call blocks in content when serializing arguments fails", () => {
     const original = JSON.stringify;
     (JSON as { stringify: typeof original }).stringify = () => {
       throw new Error("circular");
     };
     try {
       expect(splitToolCalls('<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>')).toEqual({
-        content: "",
-        calls: [{ name: "a", arguments: "{}" }],
+        content: '<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>',
+        calls: [],
       });
     } finally {
       (JSON as { stringify: typeof original }).stringify = original;
