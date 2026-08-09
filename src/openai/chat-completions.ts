@@ -16,22 +16,20 @@ const imageUrlContentPartSchema = z.object({
 const contentPartSchema = z.union([textContentPartSchema, imageUrlContentPartSchema]);
 
 /** A tool invocation attached to an assistant message. */
-const toolCallSchema = z
-  .object({
-    id: z.string().optional(),
-    type: z.literal("function").optional(),
-    function: z.object({ name: z.string(), arguments: z.string().optional() }).optional(),
-  });
+const toolCallSchema = z.object({
+  id: z.string().optional(),
+  type: z.literal("function").optional(),
+  function: z.object({ name: z.string(), arguments: z.string().optional() }).optional(),
+});
 
 /** A caller-supplied tool definition. */
 const toolSchema = z.object({
   type: z.literal("function"),
-  function: z
-    .object({
-      name: z.string(),
-      description: z.string().optional(),
-      parameters: jsonObjectSchema.optional(),
-    }),
+  function: z.object({
+    name: z.string(),
+    description: z.string().optional(),
+    parameters: jsonObjectSchema.optional(),
+  }),
 });
 
 /** A `tool_choice` naming a specific function. */
@@ -48,29 +46,28 @@ export const chatMessageSchema = z.object({
   tool_calls: z.array(toolCallSchema).optional(),
 });
 
-export const chatCompletionRequestSchema = z
-  .object({
-    model: z.string().min(1),
-    messages: z.array(chatMessageSchema).min(1),
-    stream: z.boolean().default(false),
-    max_tokens: z.number().int().positive().optional(),
-    temperature: z.number().min(0).max(2).optional(),
-    top_p: z.number().min(0).max(1).optional(),
-    n: z.number().int().positive().optional(),
-    stop: z.union([z.string(), z.array(z.string())]).optional(),
-    presence_penalty: z.number().min(-2).max(2).optional(),
-    frequency_penalty: z.number().min(-2).max(2).optional(),
-    seed: z.number().int().optional(),
-    response_format: z
-      .object({
-        type: z.enum(["text", "json_object"]),
-        json_schema: jsonObjectSchema.optional(),
-      })
-      .optional(),
-    stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
-    tools: z.array(toolSchema).optional(),
-    tool_choice: z.union([z.string(), toolChoiceFunctionSchema]).optional(),
-  });
+export const chatCompletionRequestSchema = z.object({
+  model: z.string().min(1),
+  messages: z.array(chatMessageSchema).min(1),
+  stream: z.boolean().default(false),
+  max_tokens: z.number().int().positive().optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  top_p: z.number().min(0).max(1).optional(),
+  n: z.number().int().positive().optional(),
+  stop: z.union([z.string(), z.array(z.string())]).optional(),
+  presence_penalty: z.number().min(-2).max(2).optional(),
+  frequency_penalty: z.number().min(-2).max(2).optional(),
+  seed: z.number().int().optional(),
+  response_format: z
+    .object({
+      type: z.enum(["text", "json_object"]),
+      json_schema: jsonObjectSchema.optional(),
+    })
+    .optional(),
+  stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
+  tools: z.array(toolSchema).optional(),
+  tool_choice: z.union([z.string(), toolChoiceFunctionSchema]).optional(),
+});
 
 export type ChatCompletionRequest = z.infer<typeof chatCompletionRequestSchema>;
 export type ChatCompletionMessage = z.infer<typeof chatMessageSchema>;
