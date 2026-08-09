@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenAI Compatibility & Limitations — opencode-to-openai</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --bg-alt: #161b22;
+        --bg-code: #090d13;
+        --border: #30363d;
+        --text: #c9d1d9;
+        --text-dim: #8b949e;
+        --text-faint: #484f58;
+        --accent: #58a6ff;
+        --accent-green: #3fb950;
+        --accent-orange: #f0883e;
+        --accent-red: #f85149;
+        --accent-pink: #db61a2;
+        --code: #ff9b57;
+        --radius: 8px;
+        --font-sans:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial,
+          sans-serif;
+        --font-mono:
+          "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Consolas, "Liberation Mono", Menlo,
+          monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        line-height: 1.6;
+        font-size: 16px;
+      }
+
+      header.site {
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-alt);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        padding: 16px 24px;
+      }
+
+      header.site .inner {
+        max-width: 1000px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      header.site .brand {
+        font-weight: 700;
+        font-size: 18px;
+        color: var(--text);
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      header.site .brand .mark {
+        display: inline-block;
+        width: 26px;
+        height: 26px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-pink));
+        color: #0d1117;
+        font-weight: 800;
+        font-size: 15px;
+        line-height: 26px;
+        text-align: center;
+      }
+
+      main {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 40px 24px 80px;
+      }
+
+      .lead {
+        font-size: 1.2rem;
+        color: var(--text-dim);
+        margin-bottom: 32px;
+      }
+
+      h1 {
+        font-size: 2.2rem;
+        margin: 0 0 12px;
+        letter-spacing: -0.02em;
+      }
+      h2 {
+        font-size: 1.6rem;
+        margin: 48px 0 16px;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 8px;
+        letter-spacing: -0.01em;
+      }
+      h3 {
+        font-size: 1.2rem;
+        margin: 32px 0 12px;
+        color: var(--accent);
+      }
+
+      p {
+        margin: 12px 0;
+      }
+      code {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+        background: var(--bg-code);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 2px 6px;
+        color: var(--code);
+      }
+
+      pre {
+        background: var(--bg-code);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        overflow-x: auto;
+        line-height: 1.5;
+      }
+
+      pre code {
+        background: none;
+        border: none;
+        padding: 0;
+        color: var(--text);
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 24px 0;
+        font-size: 0.95rem;
+      }
+
+      th,
+      td {
+        text-align: left;
+        border: 1px solid var(--border);
+        padding: 12px;
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--bg-alt);
+        color: var(--text);
+        font-weight: 600;
+      }
+      tr:nth-child(even) td {
+        background: var(--bg-alt);
+      }
+
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        border-radius: 4px;
+        padding: 2px 8px;
+        vertical-align: middle;
+      }
+      .tag.supported {
+        background: rgba(63, 185, 80, 0.15);
+        color: var(--accent-green);
+        border: 1px solid rgba(63, 185, 80, 0.3);
+      }
+      .tag.emulated {
+        background: rgba(240, 136, 62, 0.15);
+        color: var(--accent-orange);
+        border: 1px solid rgba(240, 136, 62, 0.3);
+      }
+      .tag.ignored {
+        background: rgba(139, 148, 158, 0.15);
+        color: var(--text-dim);
+        border: 1px solid rgba(139, 148, 158, 0.3);
+      }
+      .tag.unsupported {
+        background: rgba(248, 81, 73, 0.15);
+        color: var(--accent-red);
+        border: 1px solid rgba(248, 81, 73, 0.3);
+      }
+
+      .callout {
+        border-left: 4px solid var(--accent-orange);
+        background: var(--bg-alt);
+        padding: 16px;
+        border-radius: 0 var(--radius) var(--radius) 0;
+        margin: 24px 0;
+      }
+      .callout-title {
+        font-weight: 700;
+        margin-bottom: 8px;
+        color: var(--accent-orange);
+      }
+
+      footer {
+        border-top: 1px solid var(--border);
+        padding: 24px;
+        text-align: center;
+        color: var(--text-dim);
+        font-size: 14px;
+        background: var(--bg-alt);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site">
+      <div class="inner">
+        <div class="brand"><span class="mark">C</span> opencode-to-openai</div>
+        <div style="color: var(--text-dim); font-size: 14px">Compatibility Guide</div>
+      </div>
+    </header>
+
+    <main>
+      <h1>OpenAI API Compatibility &amp; Limitations</h1>
+      <p class="lead">
+        This document details how OpenAI Chat Completion (v1) API features map to the underlying
+        OpenCode session engine. Since <code>opencode-to-openai</code> bridges a stateful, agentic
+        local engine with a stateless chat completion protocol, certain options are emulated, some
+        have partial/lossy translation, and many generation options are bypassed during API
+        interaction.
+      </p>
+
+      <div class="callout">
+        <div class="callout-title">Core Mismatch Notice</div>
+        <p>
+          The OpenAI protocol is completely stateless (the client resends the entire history on
+          every request). OpenCode sessions are server-side, stateful, and run their own multi-step
+          agent loops. The adapter is responsible for bridging these two paradigms by mapping client
+          parameters, emulating tools, and flattening conversational history.
+        </p>
+      </div>
+
+      <h2>Feature &amp; Parameter Matrix</h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 25%">OpenAI Parameter</th>
+            <th style="width: 20%">Status</th>
+            <th style="width: 55%">Implementation Details &amp; Limitations</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>model</code></td>
+            <td><span class="tag supported">Supported</span></td>
+            <td>
+              Must be a <code>"provider/model"</code> pair matching OpenCode&rsquo;s discovery (e.g.
+              <code>"anthropic/claude-3-5-sonnet-20241022"</code>). Invalid model strings are
+              rejected with a <code>400 Bad Request</code> error.
+            </td>
+          </tr>
+          <tr>
+            <td><code>messages</code></td>
+            <td><span class="tag emulated">Emulated / Lossy</span></td>
+            <td>
+              Since OpenCode starts a fresh session and cannot natively replay prior turns, the
+              adapter flattens all preceding turns (including past tool calls and results) into a
+              single <strong>transcript part</strong> formatted with role headers (e.g.
+              <code>user:</code>, <code>assistant:</code>, <code>tool:</code>) which is pre-pended
+              to the active prompt.
+            </td>
+          </tr>
+          <tr>
+            <td><code>stream</code></td>
+            <td><span class="tag emulated">Emulated</span></td>
+            <td>
+              Synthesized at the adapter layer. OpenCode&rsquo;s <code>session.prompt</code> is
+              executed to completion, and then the adapter splits the resulting completion into
+              incremental standard SSE completion chunks (including fragmented tool arguments and
+              role-only preamble).
+            </td>
+          </tr>
+          <tr>
+            <td><code>tools</code></td>
+            <td><span class="tag emulated">Emulated</span></td>
+            <td>
+              Declares userspace tools. Translated into an emulated markdown prose section injected
+              into the <code>system</code> prompt, instructing the model to output tool invocations
+              in <code>&lt;tool_call&gt;...&lt;/tool_call&gt;</code> tags. Native OpenCode session
+              tools are bypassed.
+            </td>
+          </tr>
+          <tr>
+            <td><code>tool_choice</code></td>
+            <td><span class="tag emulated">Emulated</span></td>
+            <td>
+              Enforced via prompt engineering. <code>"none"</code> forces a no-tools instruction;
+              <code>"required"</code> forces the model to use at least one tool; specific functions
+              force the exact tool. Throws <code>400 Bad Request</code> if tool_choice is specified
+              but tools are omitted/unknown.
+            </td>
+          </tr>
+          <tr>
+            <td><code>stream_options</code></td>
+            <td><span class="tag supported">Supported</span></td>
+            <td>
+              Supports <code>include_usage: true</code> by appending a dedicated usage chunk with
+              empty <code>choices</code> at the end of the SSE stream.
+            </td>
+          </tr>
+          <tr>
+            <td><code>temperature</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>
+              Validated (0&ndash;2) but omitted from prompt requests. OpenCode uses the underlying
+              model/agent default configurations.
+            </td>
+          </tr>
+          <tr>
+            <td><code>top_p</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>Validated (0&ndash;1) but completely ignored and omitted.</td>
+          </tr>
+          <tr>
+            <td><code>max_tokens</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>
+              Validated but completely ignored. OpenCode utilizes model default or context/output
+              configuration caps.
+            </td>
+          </tr>
+          <tr>
+            <td><code>n</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>
+              Validated but ignored. The adapter always generates and returns exactly 1 completion
+              candidate (<code>index: 0</code>).
+            </td>
+          </tr>
+          <tr>
+            <td><code>stop</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>
+              Validated (string or array of strings) but ignored and omitted from underlying
+              requests.
+            </td>
+          </tr>
+          <tr>
+            <td><code>presence_penalty</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>Validated (-2 to 2) but ignored and omitted.</td>
+          </tr>
+          <tr>
+            <td><code>frequency_penalty</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>Validated (-2 to 2) but ignored and omitted.</td>
+          </tr>
+          <tr>
+            <td><code>seed</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>Validated but ignored and omitted.</td>
+          </tr>
+          <tr>
+            <td><code>response_format</code></td>
+            <td><span class="tag ignored">Ignored</span></td>
+            <td>
+              Validated (supports <code>json_object</code> and custom schemas) but ignored and
+              omitted from underlying prompt requests.
+            </td>
+          </tr>
+          <tr>
+            <td><code>logit_bias</code></td>
+            <td><span class="tag unsupported">Unsupported</span></td>
+            <td>Completely unvalidated and ignored.</td>
+          </tr>
+          <tr>
+            <td><code>parallel_tool_calls</code></td>
+            <td><span class="tag unsupported">Unsupported</span></td>
+            <td>
+              Not validated or configured; the model output controls parallelization naturally
+              through markdown blocks.
+            </td>
+          </tr>
+          <tr>
+            <td><code>user</code></td>
+            <td><span class="tag unsupported">Unsupported</span></td>
+            <td>Completely ignored and unvalidated.</td>
+          </tr>
+          <tr>
+            <td><code>logprobs</code></td>
+            <td><span class="tag unsupported">Unsupported</span></td>
+            <td>
+              Always returned as <code>null</code> because the adapter never requests or obtains log
+              probabilities from the local provider.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>In-Depth Details &amp; Seams</h2>
+
+      <h3>1. Conversational History &amp; Transcript Flattening</h3>
+      <p>
+        An OpenAI client assumes the model is a stateless text predictor. It sends the entire chat
+        history in every request. In contrast, OpenCode creates a server-side <code>session</code>.
+      </p>
+      <p>
+        To reconcile this, the adapter flattens all conversational history (up until the final
+        user/tool message) into a single <strong>text transcript part</strong>. This transcript
+        format labels turns with role markers:
+      </p>
+      <pre><code>user: Can you help me investigate the flaky test?
+
+assistant: I can certainly run the test suite for you.
+&lt;tool_call&gt;{"name": "bash", "arguments": "{\"command\":\"bun test\"}"}&lt;/tool_call&gt;
+
+tool (call_12345): FAIL - test/flaky.test.ts timed out</code></pre>
+      <p>
+        Because this transcript is passed to OpenCode as a single <code>text</code> part, the model
+        views the history as a flat preamble rather than native historical turns.
+      </p>
+
+      <h3>2. Emulated Function/Tool Calling</h3>
+      <p>
+        OpenAI supports native tool-calling JSON structures, whereas OpenCode runs its own agentic
+        tools server-side. The adapter emulates OpenAI-compatible function calling by doing the
+        following:
+      </p>
+      <ul>
+        <li>
+          Injects detailed prose definitions of the client-supplied tools into the
+          <code>system</code> prompt.
+        </li>
+        <li>
+          Requires the model to request tools via a raw XML-like string payload block:
+          <code>&lt;tool_call&gt;{"name": "...", "arguments": ...}&lt;/tool_call&gt;</code>.
+        </li>
+        <li>
+          Intercepts and strips these emulated tool blocks from the textual content response before
+          returning it to the OpenAI client.
+        </li>
+        <li>
+          Surfaces the parsed blocks in the standard
+          <code>choices[0].message.tool_calls</code> array.
+        </li>
+      </ul>
+
+      <h3>3. Multi-Modality &amp; Vision Support</h3>
+      <p>
+        OpenAI Chat Completions support rich array-based content parts.
+        <code>opencode-to-openai</code> maps these as follows:
+      </p>
+      <ul>
+        <li>
+          <strong>Text Parts:</strong> Passed directly through to OpenCode as standard text parts.
+        </li>
+        <li>
+          <strong>Image URL Parts:</strong> Mapped to OpenCode <code>file</code> parts. The adapter
+          automatically detects the MIME type from data URLs or defaults to
+          <code>application/octet-stream</code> for plain HTTP URLs.
+        </li>
+        <li>
+          <strong>Other Parts (Audio, Video, etc.):</strong> Not supported. If encountered, they
+          trigger a <code>400 Bad Request</code> error.
+        </li>
+      </ul>
+
+      <h3>4. Token Accounting and Usage Mapping</h3>
+      <p>
+        OpenCode tracks token consumption with fine-grained counts, including input, output,
+        reasoning, and cache reads/writes. The adapter consolidates these counts to fit
+        OpenAI&rsquo;s standard <code>usage</code> model:
+      </p>
+      <ul>
+        <li>
+          <code>prompt_tokens</code> = OpenCode <code>input</code> + <code>cache.read</code> +
+          <code>cache.write</code>
+        </li>
+        <li>
+          <code>completion_tokens</code> = OpenCode <code>output</code> + <code>reasoning</code>
+        </li>
+        <li>
+          <code>total_tokens</code> = <code>prompt_tokens</code> + <code>completion_tokens</code>
+        </li>
+      </ul>
+    </main>
+
+    <footer>opencode-to-openai &copy; 2026. CC BY-NC-ND 4.0 License.</footer>
+  </body>
+</html>
