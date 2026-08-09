@@ -8,7 +8,7 @@ import { createOpencodeHttpClient } from "../../src/opencode/client.ts";
 import { OpencodeChatCompletionsService } from "../../src/services/opencode/service.ts";
 import { E2E_MODEL, startOpencode, type TestOpencode } from "./support/opencode.ts";
 import { postJson } from "./support/requests.ts";
-import { startServer } from "./support/server.ts";
+import { startServer, stubModels } from "./support/server.ts";
 const PROMPT = "Reply with exactly one word: pong";
 
 function completionBody(extra: Partial<ChatCompletionRequest> = {}): RequestInit {
@@ -40,6 +40,7 @@ describe("e2e POST /v1/chat/completions (real opencode server)", () => {
   function proxyBaseUrl(): string {
     const proxy = startServer({
       chatCompletions: new OpencodeChatCompletionsService(createOpencodeHttpClient(opencode.url)),
+      models: stubModels,
     });
     return proxy.baseUrl;
   }
@@ -114,6 +115,7 @@ describe("e2e POST /v1/chat/completions (real opencode server)", () => {
     dead.stop();
     const baseUrl = startServer({
       chatCompletions: new OpencodeChatCompletionsService(createOpencodeHttpClient(deadUrl)),
+      models: stubModels,
     }).baseUrl;
 
     const response = await fetch(`${baseUrl}/v1/chat/completions`, completionBody());

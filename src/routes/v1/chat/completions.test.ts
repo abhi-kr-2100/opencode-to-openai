@@ -120,7 +120,9 @@ describe("POST /v1/chat/completions", () => {
 
   test("returns an SSE stream and disables the timeout for streaming requests", async () => {
     const timeouts: number[] = [];
-    const server: TimeoutConfigurableServer = { timeout: (_request, seconds) => timeouts.push(seconds) };
+    const server: TimeoutConfigurableServer = {
+      timeout: (_request, seconds) => timeouts.push(seconds),
+    };
     const router = new Router();
     router.register(
       "POST",
