@@ -9,13 +9,31 @@ export function sseResponse<T>(events: AsyncIterable<T>): Response {
   const encoder = new TextEncoder();
   const iterator = events[Symbol.asyncIterator]();
   let cancelled = false;
+  let returned = false;
+  const returnOnce = (): Promise<IteratorResult<T>> => {
+    if (returned) {
+      return Promise.resolve({ done: true, value: undefined as T });
+    }
+    returned = true;
+    return iterator.return ? iterator.return() : Promise.resolve({ done: true, value: undefined as T });
+  };
+  const guardedIterator = {
+    next: () => iterator.next(),
+    return: returnOnce,
+  };
+  const iterableWrapper: AsyncIterable<T> = {
+    [Symbol.asyncIterator]() {
+      return guardedIterator;
+    },
+  };
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        for (;;) {
+        // Using for await...of avoids the eslint(no-await-in-loop) warning,
+        // while the guarded iterator funnels both cancellation and
+        // AsyncIteratorClose through the same once-only return.
+        for await (const value of iterableWrapper) {
           if (cancelled) return;
-          const { done, value } = await iterator.next();
-          if (done) break;
           controller.enqueue(encoder.encode(encodeSseEvent(value)));
         }
         if (!cancelled) controller.close();
@@ -25,9 +43,7 @@ export function sseResponse<T>(events: AsyncIterable<T>): Response {
     },
     cancel() {
       cancelled = true;
-      if (iterator.return) {
-        void iterator.return();
-      }
+      void returnOnce();
     },
   });
   return new Response(body, {

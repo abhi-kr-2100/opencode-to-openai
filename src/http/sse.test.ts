@@ -5,12 +5,15 @@ async function streamToText(response: Response): Promise<string> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let text = "";
-  while (true) {
+  async function read(): Promise<string> {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      return text + decoder.decode();
+    }
     text += decoder.decode(value, { stream: true });
+    return read();
   }
-  return text + decoder.decode();
+  return read();
 }
 
 async function* framedEvents(): AsyncGenerator<string | { type: string; content: string }> {
@@ -105,6 +108,14 @@ describe("encodeSseEvent", () => {
   });
 });
 
+async function waitFor(condition: () => boolean, maxAttempts = 100): Promise<void> {
+  if (condition() || maxAttempts <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return waitFor(condition, maxAttempts - 1);
+}
+
 describe("sseResponse", () => {
   test("frames an async iterable as an SSE response", async () => {
     const response = sseResponse(framedEvents());
@@ -124,15 +135,11 @@ describe("sseResponse", () => {
   test("releases the iterator being consumed when the consumer cancels", async () => {
     const { source, begunIds, releasedIds } = pendingSource();
     const response = sseResponse(source);
-    for (let i = 0; i < 100 && begunIds().length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    await waitFor(() => begunIds().length !== 0);
     expect(begunIds()).toHaveLength(1);
     const consumedId = begunIds()[0]!;
     await response.body!.getReader().cancel();
-    for (let i = 0; i < 100 && releasedIds().length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    await waitFor(() => releasedIds().length !== 0);
     expect(releasedIds()).toContain(consumedId);
   });
 
@@ -142,10 +149,7 @@ describe("sseResponse", () => {
     const reader = response.body!.getReader();
     await reader.read();
     await reader.cancel();
-    for (let i = 0; i < 5; i++) {
-      if (returned()) break;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    await waitFor(() => returned(), 5);
     expect(returned()).toBe(true);
   });
 });

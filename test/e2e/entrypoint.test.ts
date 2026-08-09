@@ -57,20 +57,38 @@ async function readLogUntil(
   const decoder = new TextDecoder();
   let text = "";
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+
+  async function readNext(): Promise<string> {
+    if (Date.now() >= deadline) {
+      await reader.cancel();
+      throw new Error(`timed out waiting for output matching ${pattern}; got: ${text}`);
+    }
     const result = (await Promise.race([
       reader.read(),
       new Promise<{ timedOut: true }>((resolve) =>
         setTimeout(() => resolve({ timedOut: true }), deadline - Date.now()),
       ),
     ])) as { done?: boolean; value?: Uint8Array } | { timedOut: true };
+
     if ("timedOut" in result) {
       await reader.cancel();
       throw new Error(`timed out waiting for output matching ${pattern}; got: ${text}`);
     }
-    if (result.done) break;
+    if (result.done) {
+      return finish(text + decoder.decode());
+    }
     text += decoder.decode(result.value, { stream: true });
-    if (pattern.test(text)) break;
+    if (pattern.test(text)) {
+      return finish(text + decoder.decode());
+    }
+    return readNext();
   }
-  return text + decoder.decode();
+
+  async function finish(output: string): Promise<string> {
+    await reader.cancel();
+    reader.releaseLock();
+    return output;
+  }
+
+  return readNext();
 }
