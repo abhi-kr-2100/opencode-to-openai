@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { loadConfig } from "./config.ts";
 
-const DEFAULTS = { host: "127.0.0.1", port: 8000, opencodeUrl: "http://localhost:4096" };
+const DEFAULTS = {
+  host: "127.0.0.1",
+  port: 8000,
+  opencodeUrl: "http://localhost:4096",
+  embeddingsModel: "Xenova/bge-small-en-v1.5",
+  embeddingsPreload: false,
+};
 
 describe("loadConfig", () => {
   test("defaults host, port, and opencode url", () => {
@@ -19,7 +25,30 @@ describe("loadConfig", () => {
       host: "0.0.0.0",
       port: 9000,
       opencodeUrl: "http://opencode.example:7777",
+      embeddingsModel: "Xenova/bge-small-en-v1.5",
+      embeddingsPreload: false,
     });
+  });
+
+  test("reads EMBEDDINGS_MODEL and EMBEDDINGS_PRELOAD", () => {
+    expect(
+      loadConfig({
+        EMBEDDINGS_MODEL: " Xenova/all-MiniLM-L6-v2 ",
+        EMBEDDINGS_PRELOAD: "true",
+      }),
+    ).toEqual({
+      host: "127.0.0.1",
+      port: 8000,
+      opencodeUrl: "http://localhost:4096",
+      embeddingsModel: "Xenova/all-MiniLM-L6-v2",
+      embeddingsPreload: true,
+    });
+
+    expect(
+      loadConfig({
+        EMBEDDINGS_PRELOAD: "1",
+      }).embeddingsPreload,
+    ).toBe(true);
   });
 
   test("trims whitespace", () => {
@@ -33,6 +62,8 @@ describe("loadConfig", () => {
       host: "localhost",
       port: 8123,
       opencodeUrl: "http://opencode.example:7777",
+      embeddingsModel: "Xenova/bge-small-en-v1.5",
+      embeddingsPreload: false,
     });
   });
 
