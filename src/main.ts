@@ -11,7 +11,7 @@ const config = loadConfig();
 let opencodeUrl = config.opencodeUrl;
 let opencodeServer: Awaited<ReturnType<typeof createOpencodeServer>> | null = null;
 
-if (!process.env.OPENCODE_URL) {
+if (opencodeUrl === null) {
   opencodeServer = await createOpencodeServer({ port: 0, timeout: 30_000 });
   opencodeUrl = opencodeServer.url;
 }

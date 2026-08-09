@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { loadConfig } from "./config.ts";
 
-const DEFAULTS = { host: "127.0.0.1", port: 8000, opencodeUrl: "http://localhost:4096" };
+const DEFAULTS = { host: "127.0.0.1", port: 8000, opencodeUrl: null };
 
 describe("loadConfig", () => {
   test("defaults host, port, and opencode url", () => {
