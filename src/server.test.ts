@@ -8,7 +8,13 @@ describe("createServer", () => {
     const router = new Router();
     router.register("GET", "/ping", () => sendJson(200, { ok: true }));
     const server = createServer(
-      { host: "127.0.0.1", port: 0, opencodeUrl: "http://localhost:4096" },
+      {
+        host: "127.0.0.1",
+        port: 0,
+        opencodeUrl: "http://localhost:4096",
+        embeddingsModel: "Xenova/bge-small-en-v1.5",
+        embeddingsPreload: false,
+      },
       router,
     );
     try {
