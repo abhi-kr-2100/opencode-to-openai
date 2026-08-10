@@ -14,17 +14,18 @@ describe("src/main.ts", () => {
       try {
         let embedded: { url: string; close(): void } | null = null;
         const { boot } = await import("../../src/main.ts");
-        const server = await boot(true, {
+        const result = await boot(true, {
           createOpencodeServer: async (options: ServerOptions) => {
             const real = await createOpencodeServer(options);
             embedded = real;
             return real;
           },
         });
-        expect(server).not.toBeNull();
+        expect(result).not.toBeNull();
         expect(embedded).not.toBeNull();
-        expect(server!.port).toBeGreaterThan(0);
-        server!.stop();
+        const server = result!.server;
+        expect(server.port).toBeGreaterThan(0);
+        server.stop();
         await expectConnectionClosed(embedded!.url);
       } finally {
         if (previousPort === undefined) delete process.env.PORT;
