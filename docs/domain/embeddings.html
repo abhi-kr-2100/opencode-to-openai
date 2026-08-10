@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Embeddings — Domain Guide</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="site">
+      <div class="inner">
+        <a class="brand" href="index.html"><span class="mark">G</span> Domain Guides</a>
+        <nav class="site">
+          <a href="index.html">Overview</a>
+          <a href="opencode.html">OpenCode</a>
+          <a href="openai-v1-api.html">OpenAI v1 API</a>
+          <a href="bridging.html">Bridging</a>
+          <a href="embeddings.html" class="active">Embeddings</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <h1>The embeddings domain</h1>
+      <p class="lead">
+        An <em>embedding</em> is a compact list of numbers that captures what a piece of text
+        <em>means</em>, produced by a model that is trained to place similar texts close together.
+        This guide explains where those numbers come from, how machines decide that two texts are
+        similar, what the numbers are useful for, and the wire contract of the
+        <code>/v1/embeddings</code> API. It assumes no prior knowledge of machine learning: terms
+        like <em>pipeline</em>, <em>pooling</em>, and <em>L2 norm</em> are defined the first time
+        they appear.
+      </p>
+
+      <h2>What an embedding is</h2>
+      <p>
+        Send text to an embedding model and you get back a list of numbers — always the same length,
+        no matter how long or short the text is:
+      </p>
+      <pre><code>"the cat sat on the mat" → [ 0.021, -0.113, 0.004, …, 0.087 ]   (384 numbers)
+"trains run on diesel"      → [ 0.211, -0.052, 0.133, …, -0.096 ]   (384 numbers)</code></pre>
+      <p>
+        The important thing is what the numbers <em>mean</em>. Think of each list as the
+        <strong>address of the text in a map</strong>. The model was trained so that texts that say
+        much the same thing occupy nearly the same address, and unrelated texts are far apart:
+      </p>
+      <pre><code>"the cat sat on the mat"  ↔  "a cat was resting near the rug"   → very close
+"the cat sat on the mat"  ↔  "I need to buy milk and eggs"      → very far</code></pre>
+      <p>
+        That single property — <em>meaning maps to location</em> — is the whole power of embeddings.
+        It turns the question &ldquo;is this text related to that one?&rdquo; into a
+        <strong>distance problem</strong>, which machines are good at. It also means the numbers
+        record <em>meaning, not spelling</em>: <code>cheap</code> and <code>inexpensive</code> land
+        near each other even though they share no letters, while <code>cheap</code> and
+        <code>cheep</code> (one letter apart) do not.
+      </p>
+      <p>A few pieces of vocabulary before going further:</p>
+      <ul>
+        <li>
+          <strong>Vector</strong> — one such list of numbers. &ldquo;A vector of 384 numbers&rdquo;
+          means exactly that.
+        </li>
+        <li>
+          <strong>Dimension</strong> — one coordinate of the vector, i.e. one numbered position in
+          the list. &ldquo;384 dimensions&rdquo; means each text is placed in a space with 384
+          independent directions of variation, and gets one coordinate along each.
+        </li>
+        <li>
+          <strong>Embedding model</strong> — the machine that performs the mapping from text to
+          vector. It is a neural network of the same family that powers chat models, but it
+          generates no words; it only outputs coordinates.
+        </li>
+      </ul>
+      <p>
+        Finally, embeddings are <strong>deterministic</strong>: the same model always turns the same
+        text into the same vector. This is what makes the whole workflow possible — documents can be
+        embedded once and stored, and any later piece of text can be compared against them.
+      </p>
+
+      <h2>How text becomes a vector: the pipeline</h2>
+      <p>
+        Turning one piece of text into one vector is a fixed sequence of steps — the
+        <span class="term">pipeline</span>. Every embedding request runs through the same four
+        stages, in this order:
+      </p>
+      <div class="flow">
+        <div class="node em">
+          <div class="n-title">Text</div>
+          <div class="n-sub">any length, any spelling</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">1 · Tokenize</div>
+          <div class="n-sub">split into tokens the model knows</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">2 · Encode</div>
+          <div class="n-sub">one provisional vector per token</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">3 · Mean pool</div>
+          <div class="n-sub">average the token vectors</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">4 · L2 normalize</div>
+          <div class="n-sub">shrink to unit length</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">Embedding</div>
+          <div class="n-sub">384 numbers, ready to compare</div>
+        </div>
+      </div>
+
+      <h3>1. Tokenization — text becomes a list of tokens</h3>
+      <p>
+        A model does not read text character by character or word by word. It reads
+        <span class="term">tokens</span>: pieces of text from a fixed vocabulary the model was
+        trained on (roughly word pieces — <code>cat</code> is one token, a long word may be
+        several). The <span class="term">tokenizer</span> splits the input into tokens and looks up
+        each token&rsquo;s numeric id in that vocabulary:
+      </p>
+      <pre><code>"the cat sat on the mat"
+        ↓ tokenize
+      [the] [cat] [sat] [on] [the] [mat]     ← 6 tokens, in order
+       791   3257  10432  525   791  23501    ← each token's vocabulary id (illustrative)</code></pre>
+      <p>
+        Tokenization is why batch requests (many texts in one call) are efficient, and it is where
+        the model&rsquo;s input limits come from: a &ldquo;512 token limit&rdquo; is a limit on the
+        number of tokens, not the number of characters.
+      </p>
+
+      <h3>2. Encoding — one provisional vector per token</h3>
+      <p>
+        The model now reads the tokens in order and computes, for each token, a
+        <em>provisional</em> vector of the full size. Six tokens produce a six-row table of numbers,
+        one row per token:
+      </p>
+      <pre><code>the    → [ 0.301, -0.120, 0.054, … ]        ┐
+cat    → [ 0.922,  0.031, -0.308, … ]        │
+sat    → [ 0.411,  0.288,  0.017, … ]        │  6 rows × 384 columns:
+on     → [ 0.020, -0.156,  0.021, … ]        │  one 384-vector per token
+the    → [ 0.301, -0.120, 0.054, … ]        │
+mat    → [ 0.877,  0.140, -0.212, … ]        ┘</code></pre>
+      <p>
+        No row yet represents the whole sentence. Each row still belongs to one token, and its
+        numbers depend on the token and its surroundings.
+      </p>
+
+      <h3>3. Mean pooling — many token vectors become one text vector</h3>
+      <p>
+        The model must produce one fixed-size vector no matter how many tokens the input had. Length
+        differences cannot change the output size — a model&rsquo;s dimension count is fixed
+        forever.
+        <span class="term">Mean pooling</span> (a.k.a. average pooling) solves this: add the token
+        rows together element-wise, then divide by the number of tokens:
+      </p>
+      <pre><code>the + cat + sat + on + the + mat   (6 rows of 384 numbers)
+                ÷ 6
+        →  1 row of 384 numbers     ← the whole text's vector</code></pre>
+      <p>
+        Every token contributes to the average, so the sentence vector is a blend of all its words.
+        Mean pooling is the standard choice for similarity-oriented models (some models use other
+        strategies, such as the first token&rsquo;s vector; the API contract here assumes mean
+        pooling, matching OpenAI&rsquo;s <code>text-embedding-3</code> family).
+      </p>
+
+      <h3>4. L2 normalization — shrink the vector to unit length</h3>
+      <p>
+        A vector has a <strong>length</strong> — also called its <span class="term">L2 norm</span> —
+        computed from the numbers themselves:
+      </p>
+      <pre><code>length = √(x₁² + x₂² + … + x₃₈₄²)        (square each number, add them up, take the root)
+
+example:  vector (3, 4)
+          length = √(3² + 4²) = √25 = 5
+          normalized → (3/5, 4/5) = (0.6, 0.8)
+          check: √(0.6² + 0.8²) = √1 = 1   ✓</code></pre>
+      <p>
+        <span class="term">L2 normalization</span> divides every number of the vector by the
+        vector&rsquo;s length, so the result has length exactly 1. Why bother?
+      </p>
+      <ul>
+        <li>
+          <strong>Length should carry no information.</strong> A long document should not get a
+          &ldquo;bigger&rdquo; vector than a short sentence — only the <em>direction</em> in
+          meaning-space should matter. Normalization guarantees that.
+        </li>
+        <li>
+          <strong>It enables a simple comparison formula.</strong> The similarity calculation below
+          is only a plain multiplication when both vectors have length 1.
+        </li>
+      </ul>
+      <p>
+        The vectors returned by the embeddings API are <strong>already normalized</strong> — clients
+        can compare them directly without renormalizing, exactly as with OpenAI&rsquo;s embedding
+        endpoints.
+      </p>
+
+      <h2>Comparing embeddings: the dot product and cosine similarity</h2>
+      <p>
+        Once every vector has length 1, &ldquo;how similar are two texts?&rdquo; becomes one number.
+        The <span class="term">dot product</span> multiplies each pair of matching numbers and adds
+        the results:
+      </p>
+      <pre><code>similarity = (a₁·b₁ + a₂·b₂ + … + a₃₈₄·b₃₈₄) / (|a| · |b|)   ← cosine similarity
+
+for normalized vectors |a| = |b| = 1, so the formula collapses to:
+
+similarity = a₁·b₁ + a₂·b₂ + … + a₃₈₄·b₃₈₄                   ← just the dot product</code></pre>
+      <p>
+        This value — the <span class="term">cosine similarity</span> — is the cosine of the angle
+        between the two arrows, a number in the range −1 to 1:
+      </p>
+      <table>
+        <tr>
+          <th>Value</th>
+          <th>What the arrows are doing</th>
+          <th>Meaning for the texts</th>
+        </tr>
+        <tr>
+          <td><code>1</code></td>
+          <td>pointing the same way</td>
+          <td>identical (or near-identical) meaning — achieved only by duplicate text</td>
+        </tr>
+        <tr>
+          <td><code>≈ 0.9</code></td>
+          <td>nearly the same way</td>
+          <td>strongly related — paraphrases, answers, matching chunks</td>
+        </tr>
+        <tr>
+          <td><code>≈ 0.1</code></td>
+          <td>roughly perpendicular</td>
+          <td>unrelated</td>
+        </tr>
+        <tr>
+          <td><code>−1</code></td>
+          <td>opposite ways</td>
+          <td>opposite meaning; rare for real text</td>
+        </tr>
+      </table>
+      <p>Concrete pairwise similarities for real-looking texts:</p>
+      <table>
+        <tr>
+          <th>Pair</th>
+          <th>Cosine similarity</th>
+        </tr>
+        <tr>
+          <td>
+            &ldquo;The cat sat on the mat.&rdquo; / &ldquo;A cat was resting near the rug.&rdquo;
+          </td>
+          <td><code>0.94</code></td>
+        </tr>
+        <tr>
+          <td>&ldquo;The cat sat on the mat.&rdquo; / &ldquo;Trains run on diesel fuel.&rdquo;</td>
+          <td><code>0.06</code></td>
+        </tr>
+        <tr>
+          <td>
+            &ldquo;Trains run on diesel fuel.&rdquo; / &ldquo;Rails and locomotives are being
+            electrified.&rdquo;
+          </td>
+          <td><code>0.87</code></td>
+        </tr>
+        <tr>
+          <td>
+            &ldquo;A cat was resting near the rug.&rdquo; / &ldquo;Rails and locomotives are being
+            electrified.&rdquo;
+          </td>
+          <td><code>0.11</code></td>
+        </tr>
+      </table>
+      <p>The number is used in two standard ways:</p>
+      <ul>
+        <li>
+          <strong>Ranking:</strong> return the stored texts with the <em>highest</em> similarity to
+          the query — this is <strong>nearest-neighbor search</strong> (&ldquo;the top 5
+          matches&rdquo;).
+        </li>
+        <li>
+          <strong>Thresholding:</strong> treat similarity above some cutoff (say 0.75) as
+          &ldquo;related&rdquo; and everything below as &ldquo;not&rdquo; — good for deduplication
+          and filtering.
+        </li>
+      </ul>
+      <p>
+        A footnote for completeness: similarity can also be measured as the straight-line
+        (<strong>Euclidean</strong>) distance between the points. For normalized vectors the two
+        measures rank results identically, so vector stores may expose either and the outcomes
+        agree.
+      </p>
+
+      <h2>What embeddings are for</h2>
+      <p>
+        Embeddings power everything where a program needs to <em>find or group by meaning</em>
+        rather than by spelling:
+      </p>
+      <ul>
+        <li>
+          <strong>Semantic search.</strong> Embed the query and each candidate document, return the
+          nearest. Because matching happens in meaning-space, results need not share words with the
+          query: &ldquo;how do I renew my parking permit&rdquo; finds a page titled &ldquo;vehicle
+          registration renewals&rdquo;.
+        </li>
+        <li>
+          <strong>Retrieval-augmented generation (RAG).</strong> A chat model knows only what it was
+          trained on; RAG hands it relevant context. A corpus is split into chunks, each chunk is
+          embedded and stored; at query time the question is embedded, the closest chunks are
+          retrieved, and those chunks are fed to a chat model together with the question:
+        </li>
+      </ul>
+      <div class="flow">
+        <div class="node em">
+          <div class="n-title">Index time</div>
+          <div class="n-sub">documents → chunks → vectors → stored</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">Query time</div>
+          <div class="n-sub">question → its vector</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">Nearest neighbors</div>
+          <div class="n-sub">the k most similar stored chunks</div>
+        </div>
+        <div class="node oa">
+          <div class="n-title">Chat model</div>
+          <div class="n-sub">question + retrieved chunks → grounded answer</div>
+        </div>
+      </div>
+      <ul>
+        <li>
+          <strong>Clustering and deduplication.</strong> Nearly identical vectors correspond to
+          nearly identical texts; group by closeness or drop the duplicates.
+        </li>
+        <li>
+          <strong>Classification.</strong> Embed a handful of labeled examples per category; a new
+          text is classified by whichever example it is closest to.
+        </li>
+      </ul>
+      <p>
+        These consumers all assume the same three guarantees: the vector size is fixed, the vectors
+        are normalized, and similar meaning means a small angle (high cosine similarity).
+      </p>
+
+      <h2>The Embeddings API: <code>POST /v1/embeddings</code></h2>
+      <p>
+        The OpenAI protocol has a second major endpoint beside Chat Completions. Where
+        <code>/v1/chat/completions</code> <em>generates</em> text, <code>/v1/embeddings</code>
+        <em>converts</em> text into vectors. The request and response are deliberately simple.
+      </p>
+      <h3>The request</h3>
+      <pre><code>POST /v1/embeddings
+
+{ "model": "bge-small-en-v1.5",
+  "input": "The cat sat on the mat.",
+  "encoding_format": "float" }</code></pre>
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Meaning</th>
+        </tr>
+        <tr>
+          <td><code>model</code></td>
+          <td>
+            The embedding model id. It must be an <em>embedding</em> model — one that produces
+            vectors, never text. The id is validated against the configured model; unknown ids are
+            rejected exactly like unknown model names on other endpoints.
+          </td>
+        </tr>
+        <tr>
+          <td><code>input</code></td>
+          <td>
+            The text(s) to embed: a single string, or an array of strings. An array is a
+            <strong>batch</strong>: all inputs are processed together in one forward pass and the
+            vectors come back in the same order.
+          </td>
+        </tr>
+        <tr>
+          <td><code>encoding_format</code></td>
+          <td>
+            <code>"float"</code> (default) returns the vector as ordinary JSON numbers;
+            <code>"base64"</code> packs the same numbers into a compact string (typically about half
+            the size over the wire for a 384-dimension vector).
+          </td>
+        </tr>
+      </table>
+      <p>
+        Batching is the typical use: embed the chunks of a document (tens or hundreds of short
+        texts) in a single request rather than one request per chunk.
+      </p>
+      <h3>The response</h3>
+      <pre><code>{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [ 0.012, -0.034, … ] }
+  ],
+  "model": "bge-small-en-v1.5",
+  "usage": { "prompt_tokens": 8, "total_tokens": 8 }
+}</code></pre>
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Meaning</th>
+        </tr>
+        <tr>
+          <td><code>data[].index</code></td>
+          <td>
+            Which input each vector answers to, starting at 0. With an array of <em>n</em> inputs
+            there are <em>n</em> entries in order, so <code>data[i]</code> is the vector for
+            <code>input[i]</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><code>data[].embedding</code></td>
+          <td>
+            The vector itself: the model&rsquo;s normalized coordinates, as floats or base64
+            depending on <code>encoding_format</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><code>usage.prompt_tokens</code>, <code>total_tokens</code></td>
+          <td>
+            Token counts for <em>reading</em> the inputs (the sum of the inputs&rsquo; token
+            counts). Embeddings generate nothing, so there are never completion tokens.
+          </td>
+        </tr>
+      </table>
+      <p>
+        Responses are always <strong>one-shot</strong>: no streaming, no partial results. Clients
+        wait for the full JSON body and store or compare the vectors.
+      </p>
+      <h3>Embeddings vs. Chat Completions</h3>
+      <table>
+        <tr>
+          <th></th>
+          <th>Chat Completions</th>
+          <th>Embeddings</th>
+        </tr>
+        <tr>
+          <td><strong>Output</strong></td>
+          <td>generated text (and tool calls)</td>
+          <td>a fixed-size vector (or vectors)</td>
+        </tr>
+        <tr>
+          <td><strong>Input</strong></td>
+          <td>a conversation: roles, content parts, tools</td>
+          <td>plain text (single string or array)</td>
+        </tr>
+        <tr>
+          <td><strong>Nature</strong></td>
+          <td>generative and sampled — slight run-to-run variation</td>
+          <td>deterministic — same text, same vector, always</td>
+        </tr>
+        <tr>
+          <td><strong>Delivery</strong></td>
+          <td>single JSON body or SSE stream</td>
+          <td>single JSON body only</td>
+        </tr>
+        <tr>
+          <td><strong>Usage</strong></td>
+          <td>prompt + completion tokens</td>
+          <td>prompt tokens only</td>
+        </tr>
+        <tr>
+          <td><strong>What the client does with it</strong></td>
+          <td>reads the text</td>
+          <td>stores it, and/or compares it by dot product</td>
+        </tr>
+      </table>
+
+      <h2>Embedding models at a glance</h2>
+      <p>
+        Embedding models are small by LLM standards — tens of millions of parameters versus the
+        hundreds of billions of frontier chat models — which is exactly why one can run on a single
+        machine. Their quality is measured on <em>retrieval</em> benchmarks: given a corpus and a
+        set of queries, how often does nearest-neighbor search return the relevant documents? The
+        dimension count, token budget, and language coverage are fixed properties that consumers
+        must design around:
+      </p>
+      <table>
+        <tr>
+          <th>Model</th>
+          <th>Dims</th>
+          <th>Max tokens</th>
+          <th>Size (quantized)</th>
+          <th>Notes</th>
+        </tr>
+        <tr>
+          <td><code>all-MiniLM-L6-v2</code></td>
+          <td>384</td>
+          <td>256</td>
+          <td>~25 MB</td>
+          <td>The classic smallest; the baseline every small model is compared against.</td>
+        </tr>
+        <tr>
+          <td><code>bge-small-en-v1.5</code></td>
+          <td>384</td>
+          <td>512</td>
+          <td>~33 MB</td>
+          <td>Strong English retrieval for its size; the configured default.</td>
+        </tr>
+        <tr>
+          <td><code>gte-small</code></td>
+          <td>384</td>
+          <td>512</td>
+          <td>~33 MB</td>
+          <td>Marginal edge on general English benchmarks; trained on multilingual data.</td>
+        </tr>
+        <tr>
+          <td><code>snowflake-arctic-embed-s</code></td>
+          <td>384</td>
+          <td>512</td>
+          <td>~33 MB</td>
+          <td>Retrieval-first training; among the best retrievers at this size.</td>
+        </tr>
+        <tr>
+          <td><code>mxbai-embed-xsmall-v1</code></td>
+          <td>384</td>
+          <td>512</td>
+          <td>~33 MB</td>
+          <td>Matryoshka model: the first <em>n</em> dimensions may be used alone (see below).</td>
+        </tr>
+        <tr>
+          <td><code>bge-base-en-v1.5</code></td>
+          <td>768</td>
+          <td>512</td>
+          <td>~110 MB</td>
+          <td>~3× the weight and twice the dimensions; only where quality demands more.</td>
+        </tr>
+      </table>
+      <p>Three properties in that table matter to every consumer:</p>
+      <ul>
+        <li>
+          <strong>The token budget is a design constraint.</strong> Text beyond the budget is
+          <span class="term">truncated</span> — the excess never reaches the model and contributes
+          nothing to the vector. Documents destined for retrieval must therefore be split into
+          chunks that fit (RAG pipelines are built around this).
+        </li>
+        <li>
+          <strong>The dimension count is a contract.</strong> A vector store is built for one
+          dimension count. Every vector returned by a given model has exactly that many numbers —
+          and switching to a model with a different count invalidates previously stored vectors.
+          (Some models, marked as matryoshka, allow deliberately keeping only the first <em>n</em>
+          dimensions to trade quality for space.)
+        </li>
+        <li>
+          <strong>Models may be quantized.</strong> The same model can be stored at reduced number
+          precision (<code>q8</code>): roughly one third of the file size for a barely measurable
+          quality drop. Quantized artifacts are the standard choice for local use — the sizes above
+          are the quantized ones.
+        </li>
+      </ul>
+
+      <h2>Where embeddings run</h2>
+      <p>
+        Of the three domains in this documentation set, embeddings are the one that crosses
+        <em>no</em> bridge. Chat requests are proxied — an adapter passes them to OpenCode, which
+        runs the agentic loop. Embeddings cannot be proxied: OpenCode exposes no embedding
+        capability. Instead the adapter serves the embeddings endpoint <em>itself</em>, with a small
+        model loaded into its own process:
+      </p>
+      <div class="flow">
+        <div class="node oa">
+          <div class="n-title">OpenAI client</div>
+          <div class="n-sub">POST /v1/embeddings</div>
+        </div>
+        <div class="node mid">
+          <div class="n-title">Adapter</div>
+          <div class="n-sub">validates, batches, runs the pipeline</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">Embedding model</div>
+          <div class="n-sub">local, in-process, CPU</div>
+        </div>
+        <div class="node oa">
+          <div class="n-title">Client</div>
+          <div class="n-sub">a 384-number vector per input</div>
+        </div>
+      </div>
+      <p>The practical consequences of local embedding, which clients should expect:</p>
+      <ul>
+        <li>
+          <strong>Nothing leaves the machine.</strong> There is no external embedding service, no
+          API key, and no data egress — every text is processed on the host&rsquo;s own CPU. No GPU
+          is required.
+        </li>
+        <li>
+          <strong>First use needs a download.</strong> Before the model can run it must be fetched
+          once from the model hub and cached on disk (tens of MB). Subsequent starts load from that
+          cache.
+        </li>
+        <li>
+          <strong>Cold start.</strong> The very first request of a fresh process may take seconds
+          (download, load, warm-up) — a cold start, not a stall. The server can optionally preload
+          the model at startup so even the first request is fast. Once loaded, the model stays
+          resident in memory and is shared by all requests; each short text costs milliseconds.
+        </li>
+        <li>
+          <strong>Requests queue on the model.</strong> Embeddings are computed one batch at a time;
+          a request that arrives mid-batch waits its turn, and a long batch delays the next.
+        </li>
+        <li>
+          <strong>Vectors are model-specific.</strong> They are deterministic for a given model
+          version, but a model upgrade can move every vector; stores must be re-embedded. Clients
+          should treat vectors as belonging to the model id that produced them — which is why the
+          response echoes it.
+        </li>
+      </ul>
+
+      <h2>Glossary</h2>
+      <dl class="glossary">
+        <dt>Embedding <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            The vector a model produces for a piece of text: a fixed-length list of numbers where
+            meaning is distance. Texts that mean the same thing are close; unrelated texts are far
+            apart.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Example — the whole idea in one picture</div>
+            <div class="flow">
+              <div class="node em">
+                <div class="n-title">"cat"</div>
+                <div class="n-sub">near kitten</div>
+              </div>
+              <div class="node em">
+                <div class="n-title">"kitten"</div>
+                <div class="n-sub">near cat</div>
+              </div>
+              <div class="node em">
+                <div class="n-title">"car"</div>
+                <div class="n-sub">far away</div>
+              </div>
+            </div>
+          </div>
+        </dd>
+
+        <dt>Vector, dimension <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            A vector is the list of numbers; a dimension is one numbered slot in that list. A
+            &ldquo;384-dimension vector&rdquo; has 384 slots. A model&rsquo;s dimension count never
+            changes, however long the input text is.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Example — 384 slots, here shown as five</div>
+            <pre><code>[ 0.021, -0.113, 0.004, …, 0.087 ]
+   ↑1     ↑2     ↑3        ↑384</code></pre>
+          </div>
+        </dd>
+
+        <dt>Token / tokenizer <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            Tokens are the vocabulary pieces a model actually reads (roughly word parts). The
+            tokenizer converts text into an ordered list of token ids. &ldquo;512 tokens&rdquo; is
+            the model&rsquo;s input budget — anything beyond it is dropped.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Example — text → tokens</div>
+            <pre><code>"the cat sat" → [the] [cat] [sat] → 3 tokens</code></pre>
+          </div>
+        </dd>
+
+        <dt>Forward pass <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            One run of the model over its input. An embedding is the output of one forward pass, and
+            a batch of many texts is handled in one forward pass — which is why batching is cheap.
+          </p>
+        </dd>
+
+        <dt>Mean pooling <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            Averaging the token vectors (add the rows, divide by the token count) so texts of any
+            length yield one fixed-size vector. This is the stage that discards length and keeps
+            blended content.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Visualization — rows collapse into one row</div>
+            <div class="flow">
+              <div class="node em">
+                <div class="n-title">token rows</div>
+                <div class="n-sub">6 rows × 384 numbers</div>
+              </div>
+              <div class="node mid">
+                <div class="n-title">average</div>
+                <div class="n-sub">÷ 6</div>
+              </div>
+              <div class="node em">
+                <div class="n-title">text vector</div>
+                <div class="n-sub">1 row × 384 numbers</div>
+              </div>
+            </div>
+          </div>
+        </dd>
+
+        <dt>L2 norm / normalization <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            The length of a vector — the root of the sum of its squared numbers. Normalization
+            divides every number by that length so the vector has length exactly 1, making only its
+            direction meaningful and enabling the simple dot-product comparison. All returned
+            vectors are already normalized.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Example — rescaling to unit length</div>
+            <pre><code>(3, 4) → length √25 = 5 → (0.6, 0.8) → length √1 = 1</code></pre>
+          </div>
+        </dd>
+
+        <dt>Dot product / cosine similarity <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            The comparison: multiply matching numbers, add them up. For normalized vectors this
+            equals the cosine of the angle between the two vectors, in the range −1 (opposite) to 1
+            (identical), with ~0 meaning unrelated.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Example — same direction scores 1, perpendicular scores 0</div>
+            <pre><code>(0.6, 0.8) · (0.6, 0.8) = 0.36 + 0.64 = 1.00
+(0.6, 0.8) · (−0.8, 0.6) = −0.48 + 0.48 = 0.00</code></pre>
+          </div>
+        </dd>
+
+        <dt>Nearest-neighbor search / vector store <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            The application pattern: pre-embed a corpus, store the vectors, and answer &ldquo;which
+            stored texts are closest to this new vector?&rdquo; A
+            <em>vector store</em> (vector database) is software engineered precisely for that query.
+          </p>
+          <div class="ex">
+            <div class="ex-title">Visualization — the search loop</div>
+            <div class="flow">
+              <div class="node em">
+                <div class="n-title">query</div>
+                <div class="n-sub">text → vector</div>
+              </div>
+              <div class="node em">
+                <div class="n-title">compare</div>
+                <div class="n-sub">dot product vs. every stored vector</div>
+              </div>
+              <div class="node em">
+                <div class="n-title">top-k</div>
+                <div class="n-sub">the nearest stored texts</div>
+              </div>
+            </div>
+          </div>
+        </dd>
+
+        <dt>Truncation <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            Cutting input at the model&rsquo;s token budget (512 here). The cut portion is ignored —
+            the vector reflects only what fit. Truncation happens with a warning rather than a
+            rejection; retrieval pipelines should chunk documents so chunks fit.
+          </p>
+        </dd>
+
+        <dt>Quantization <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            Storing the model&rsquo;s numbers at reduced precision to shrink its file size — the
+            quantized variant of a model is typically about one third of the full-precision size, at
+            a barely measurable quality cost. The standard format for local, in-process models.
+          </p>
+        </dd>
+
+        <dt>Cold start <span class="tag em">Embeddings</span></dt>
+        <dd>
+          <p>
+            The latency of the first embeddings request in a fresh process: model download (once per
+            machine), load, and warm-up. Later requests are milliseconds. Preloading the model at
+            startup moves the cold start before the server is ready to serve.
+          </p>
+        </dd>
+      </dl>
+
+      <div class="pager">
+        <a href="bridging.html"><span class="dir">Previous</span> Bridging the two domains</a>
+        <a class="next" href="index.html"><span class="dir">Next</span> Overview &amp; glossary</a>
+      </div>
+    </main>
+
+    <footer class="site">Domain documentation — OpenCode, the OpenAI v1 API, and embeddings</footer>
+  </body>
+</html>

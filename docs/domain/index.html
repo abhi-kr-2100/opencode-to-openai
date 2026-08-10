@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Domain Guides — OpenCode &amp; the OpenAI v1 API</title>
+    <title>Domain Guides — OpenCode, the OpenAI v1 API &amp; Embeddings</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -15,17 +15,19 @@
           <a href="opencode.html">OpenCode</a>
           <a href="openai-v1-api.html">OpenAI v1 API</a>
           <a href="bridging.html">Bridging</a>
+          <a href="embeddings.html">Embeddings</a>
         </nav>
       </div>
     </header>
 
     <main>
-      <h1>OpenCode &amp; the OpenAI v1 API</h1>
+      <h1>OpenCode, the OpenAI v1 API &amp; embeddings</h1>
       <p class="lead">
         Domain reference for bridging a local <a href="opencode.html">OpenCode</a> installation to
-        the <a href="openai-v1-api.html">OpenAI v1 API</a> protocol. These guides describe the two
-        domains on their own terms and the conceptual seams between them — they are written to
-        inform an implementation, not to describe one.
+        the <a href="openai-v1-api.html">OpenAI v1 API</a> protocol — plus a third domain,
+        <a href="embeddings.html">text embeddings</a>. These guides describe the domains on their
+        own terms and the conceptual seams between them — they are written to inform an
+        implementation, not to describe one.
       </p>
 
       <h2>The two domains</h2>
@@ -41,8 +43,8 @@
       </p>
 
       <p>
-        These guides cover the vocabulary and mechanics of both domains and the translation problem
-        between them. The full picture looks like this:
+        These guides cover the vocabulary and mechanics of all three domains and the translation
+        problem between the first two. The full picture looks like this:
       </p>
 
       <div class="flow">
@@ -61,6 +63,34 @@
         <div class="node oa">
           <div class="n-title">Local model / provider</div>
           <div class="n-sub">Anthropic, OpenAI, Ollama, Zen &hellip;</div>
+        </div>
+      </div>
+
+      <h2>A third domain: embeddings</h2>
+      <p>
+        The adapter serves one capability that crosses no bridge at all —
+        <strong>embeddings</strong>. OpenCode has no embedding API, so instead of proxying anything,
+        the adapter embeds text itself with a small model running in its own process — no external
+        calls, no data leaves the machine. What those numbers are, the pipeline that produces them,
+        and the <code>/v1/embeddings</code> wire contract are covered in the
+        <a href="embeddings.html">embeddings guide</a>.
+      </p>
+      <div class="flow">
+        <div class="node oa">
+          <div class="n-title">OpenAI client</div>
+          <div class="n-sub">POST /v1/embeddings</div>
+        </div>
+        <div class="node mid">
+          <div class="n-title">Adapter</div>
+          <div class="n-sub">no OpenCode involved</div>
+        </div>
+        <div class="node em">
+          <div class="n-title">Embedding model</div>
+          <div class="n-sub">local, in-process, CPU</div>
+        </div>
+        <div class="node oa">
+          <div class="n-title">Client</div>
+          <div class="n-sub">a 384-number vector per input</div>
         </div>
       </div>
 
@@ -91,13 +121,22 @@
             translation is lossy.
           </p>
         </a>
+        <a class="card" href="embeddings.html">
+          <div class="kicker">Domain C</div>
+          <h3>Embeddings <span class="tag em">Embeddings</span></h3>
+          <p>
+            What text embeddings are, the pipeline that produces them, how similarity works, and the
+            <code>/v1/embeddings</code> API served from a local model.
+          </p>
+        </a>
       </div>
 
       <h2>Who this is for</h2>
       <p>
         Anyone implementing or extending an adapter that exposes OpenCode behind an OpenAI-shaped
-        API. It assumes no prior knowledge of either system. Implementers should read all three
-        guides in order; a quick refresher on one system alone requires only its dedicated guide.
+        API. It assumes no prior knowledge of either system or of embeddings. Implementers should
+        read all four guides in order; a quick refresher on one domain alone requires only its
+        dedicated guide.
       </p>
 
       <h2>Glossary</h2>
@@ -662,6 +701,6 @@ data: {"type": "message.part.updated", "properties": { "delta": "The fix is simp
       </dl>
     </main>
 
-    <footer class="site">Domain documentation — OpenCode and the OpenAI v1 API</footer>
+    <footer class="site">Domain documentation — OpenCode, the OpenAI v1 API, and embeddings</footer>
   </body>
 </html>
