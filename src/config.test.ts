@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { loadConfig } from "./config.ts";
 
-const DEFAULTS = { host: "127.0.0.1", port: 8000, opencodeUrl: "http://localhost:4096" };
+const DEFAULTS = { host: "127.0.0.1", port: 8000, opencodeUrl: null };
 
 describe("loadConfig", () => {
   test("defaults host, port, and opencode url", () => {
     expect(loadConfig({})).toEqual(DEFAULTS);
+  });
+
+  test("treats empty or whitespace-only OPENCODE_URL as unset", () => {
+    expect(loadConfig({ OPENCODE_URL: "" })).toEqual(DEFAULTS);
+    expect(loadConfig({ OPENCODE_URL: "   " })).toEqual(DEFAULTS);
   });
 
   test("reads PORT, HOST, and OPENCODE_URL from env", () => {
