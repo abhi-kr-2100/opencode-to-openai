@@ -3,12 +3,17 @@ import { buildRouter } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { createOpencodeHttpClient } from "./opencode/client.ts";
 import { createServer } from "./server.ts";
+import {
+  HuggingFaceEmbeddingsService,
+  type FeatureExtractionPipeline,
+} from "./services/embeddings.ts";
 import { OpencodeModelsService } from "./services/opencode/models.ts";
 import { OpencodeChatCompletionsService } from "./services/opencode/service.ts";
 import { displayAddress } from "./utils/net.ts";
 
 export interface StartOptions {
   createOpencodeServer?: (options: ServerOptions) => Promise<{ url: string; close(): void }>;
+  buildEmbeddingsPipeline?: FeatureExtractionPipeline;
 }
 
 export async function start(options: StartOptions = {}): Promise<ReturnType<typeof Bun.serve>> {
@@ -28,7 +33,20 @@ export async function start(options: StartOptions = {}): Promise<ReturnType<type
     const chatCompletions = new OpencodeChatCompletionsService(opencodeClient);
     const models = new OpencodeModelsService(opencodeClient);
 
-    const router = buildRouter(chatCompletions, models);
+    const embeddings = new HuggingFaceEmbeddingsService(
+      config.embeddingsModel,
+      options.buildEmbeddingsPipeline,
+    );
+
+    if (config.embeddingsPreload) {
+      console.log(`preloading embeddings model: ${config.embeddingsModel}`);
+      embeddings.preload().catch((err) => {
+        console.error(`failed to preload embeddings model: ${err}`);
+      });
+    }
+
+    const router = buildRouter(chatCompletions, models, embeddings);
+
     const server = createServer(config, router);
     console.log(
       `opencode-to-openai listening on http://${displayAddress(server.hostname ?? config.host)}:${server.port}`,

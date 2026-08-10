@@ -25,8 +25,13 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             bun
+            gcc
             typescript-language-server
           ];
+
+          shellHook = ''
+            export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          '';
         };
       }
     );

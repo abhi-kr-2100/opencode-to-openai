@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createOpencodeHttpClient } from "../../src/opencode/client.ts";
 import { OpencodeModelsService } from "../../src/services/opencode/models.ts";
 import { E2E_MODEL, startOpencode, type TestOpencode } from "./support/opencode.ts";
-import { startServer, stubChatCompletions } from "./support/server.ts";
+import { startServer, stubChatCompletions, stubEmbeddings } from "./support/server.ts";
 
 describe("e2e GET /v1/models (real opencode server)", () => {
   let opencode: TestOpencode;
@@ -19,6 +19,7 @@ describe("e2e GET /v1/models (real opencode server)", () => {
     const proxy = startServer({
       chatCompletions: stubChatCompletions,
       models: new OpencodeModelsService(createOpencodeHttpClient(opencode.url)),
+      embeddings: stubEmbeddings,
     });
     return proxy.baseUrl;
   }
@@ -47,6 +48,7 @@ describe("e2e GET /v1/models (real opencode server)", () => {
     const baseUrl = startServer({
       chatCompletions: stubChatCompletions,
       models: new OpencodeModelsService(createOpencodeHttpClient(deadUrl)),
+      embeddings: stubEmbeddings,
     }).baseUrl;
 
     const response = await fetch(`${baseUrl}/v1/models`);
