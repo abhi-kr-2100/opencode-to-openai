@@ -4,5 +4,8 @@
     "correctness": "error",
     "suspicious": "error",
     "perf": "warn"
+  },
+  "rules": {
+    "no-explicit-any": "error"
   }
 }
