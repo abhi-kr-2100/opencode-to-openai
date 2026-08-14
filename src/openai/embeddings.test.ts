@@ -27,6 +27,25 @@ describe("embeddingsRequestSchema input validation", () => {
     ).toThrow();
   });
 
+  test("accepts an array of token ids", () => {
+    const result = embeddingsRequestSchema.parse({
+      model: "model",
+      input: [1, 2, 3],
+    });
+    expect(result.input).toEqual([1, 2, 3]);
+  });
+
+  test("accepts an array of token id arrays", () => {
+    const result = embeddingsRequestSchema.parse({
+      model: "model",
+      input: [
+        [1, 2],
+        [3],
+      ],
+    });
+    expect(result.input).toEqual([[1, 2], [3]]);
+  });
+
   test("rejects an empty array input", () => {
     expect(() =>
       embeddingsRequestSchema.parse({
@@ -41,6 +60,39 @@ describe("embeddingsRequestSchema input validation", () => {
       embeddingsRequestSchema.parse({
         model: "model",
         input: ["hello", ""],
+      }),
+    ).toThrow();
+  });
+
+  test("rejects an empty token id array", () => {
+    expect(() =>
+      embeddingsRequestSchema.parse({
+        model: "model",
+        input: [],
+      }),
+    ).toThrow();
+  });
+
+  test("rejects an array containing an empty token id array", () => {
+    expect(() =>
+      embeddingsRequestSchema.parse({
+        model: "model",
+        input: [[1], []],
+      }),
+    ).toThrow();
+  });
+
+  test("rejects fractional or negative token ids", () => {
+    expect(() =>
+      embeddingsRequestSchema.parse({
+        model: "model",
+        input: [1.5],
+      }),
+    ).toThrow();
+    expect(() =>
+      embeddingsRequestSchema.parse({
+        model: "model",
+        input: [-1],
       }),
     ).toThrow();
   });

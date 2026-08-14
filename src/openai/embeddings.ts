@@ -1,8 +1,15 @@
 import { z } from "zod";
 
+const tokenId = z.number().int().nonnegative();
+
 export const embeddingsRequestSchema = z.object({
   model: z.string().min(1),
-  input: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
+  input: z.union([
+    z.string().min(1),
+    z.array(z.string().min(1)).min(1),
+    z.array(tokenId).min(1),
+    z.array(z.array(tokenId).min(1)).min(1),
+  ]),
   encoding_format: z.enum(["float", "base64"]).default("float"),
   dimensions: z.number().int().positive().optional(),
 });

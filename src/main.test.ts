@@ -8,6 +8,7 @@ const stubPipelineExtractor: FeatureExtractor = async (inputs) => ({
 });
 stubPipelineExtractor.tokenizer = {
   encode: (text: string) => Array.from({ length: text.split(" ").length }, () => 0),
+  decode: (tokenIds: number[]) => tokenIds.join(" "),
 };
 
 const stubEmbeddingsPipeline: FeatureExtractionPipeline = async () => stubPipelineExtractor;

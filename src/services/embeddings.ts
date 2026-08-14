@@ -25,7 +25,10 @@ export interface FeatureExtractor {
       normalize?: boolean;
     },
   ): Promise<FeatureExtractorOutput>;
-  tokenizer: { encode(text: string): number[] };
+  tokenizer: {
+    encode(text: string): number[];
+    decode(tokenIds: number[]): string;
+  };
 }
 
 /**
@@ -37,6 +40,21 @@ export type FeatureExtractionPipeline = (
   model: string,
   options: { dtype: string },
 ) => Promise<FeatureExtractor>;
+
+type EmbeddingInput = string | number[];
+
+function normalizeInputs(input: EmbeddingsRequest["input"]): EmbeddingInput[] {
+  if (typeof input === "string") {
+    return [input];
+  }
+  if (typeof input[0] === "number") {
+    return [input as number[]];
+  }
+  if (typeof input[0] === "string") {
+    return input as string[];
+  }
+  return input as number[][];
+}
 
 function l2Normalize(vector: number[]): number[] {
   const sumSq = vector.reduce((acc, val) => acc + val * val, 0);
@@ -96,17 +114,24 @@ export class HuggingFaceEmbeddingsService implements EmbeddingsService {
 
   async create(request: EmbeddingsRequest): Promise<EmbeddingsList> {
     const extractor = await this.#getExtractor();
-    const inputs = Array.isArray(request.input) ? request.input : [request.input];
+    const inputs = normalizeInputs(request.input);
 
     // Compute token count
     let prompt_tokens = 0;
-    for (const text of inputs) {
-      const tokens = extractor.tokenizer.encode(text);
-      prompt_tokens += tokens.length;
+    const texts: string[] = [];
+    for (const input of inputs) {
+      if (typeof input === "string") {
+        const tokens = extractor.tokenizer.encode(input);
+        prompt_tokens += tokens.length;
+        texts.push(input);
+      } else {
+        prompt_tokens += input.length;
+        texts.push(extractor.tokenizer.decode(input));
+      }
     }
 
     // Run inference
-    const output = await extractor(inputs, { pooling: "mean", normalize: true });
+    const output = await extractor(texts, { pooling: "mean", normalize: true });
 
     // output can be a Tensor. We convert it to a nested JavaScript array
     const rawEmbeddings: number[][] = output.tolist();

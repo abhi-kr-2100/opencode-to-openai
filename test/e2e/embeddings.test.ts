@@ -99,6 +99,26 @@ describe("e2e POST /v1/embeddings (real HuggingFace model)", () => {
     expect(body.usage.total_tokens).toBe(body.usage.prompt_tokens);
   });
 
+  test("serves real embeddings for token id input", async () => {
+    const tokenIds = [1, 2, 3];
+    const response = await fetch(
+      `${proxyBaseUrl()}/v1/embeddings`,
+      postJson({ model: EMBEDDING_MODEL, input: tokenIds }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
+
+    const body = (await response.json()) as EmbeddingsList;
+    expect(body.data).toHaveLength(1);
+    const vector = body.data[0]!.embedding as number[];
+    expect(vector).toHaveLength(EMBEDDING_DIMENSIONS);
+    expect(vector.every((value) => Number.isFinite(value))).toBe(true);
+    // prompt_tokens is the length of the supplied token array
+    expect(body.usage.prompt_tokens).toBe(tokenIds.length);
+    expect(body.usage.total_tokens).toBe(tokenIds.length);
+  });
+
   test("embeds deterministically and ranks similar texts closer than unrelated ones", async () => {
     const similar = "the quick brown fox jumps over the lazy dog";
     const nearDuplicate = "a quick brown fox leaps over the sleeping dog";

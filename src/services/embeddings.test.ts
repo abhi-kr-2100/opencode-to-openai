@@ -9,6 +9,10 @@ const stubTokenizerEncode = (text: string): number[] => {
   return Array.from({ length: text.split(" ").length }, () => 0);
 };
 
+const stubTokenizerDecode = (tokenIds: number[]): string => {
+  return tokenIds.map((id) => `token${id}`).join(" ");
+};
+
 const stubExtractor: FeatureExtractor = async (inputs, _options) => {
   // Return dummy embeddings (e.g., all 0.5, normalized)
   const stubList = (Array.isArray(inputs) ? inputs : [inputs]).map(() => {
@@ -21,6 +25,7 @@ const stubExtractor: FeatureExtractor = async (inputs, _options) => {
 };
 stubExtractor.tokenizer = {
   encode: stubTokenizerEncode,
+  decode: stubTokenizerDecode,
 };
 
 function makeService(modelName = "mock-model"): {
@@ -106,6 +111,38 @@ describe("HuggingFaceEmbeddingsService", () => {
     expect(result.data[1]!.index).toBe(1);
     // "one" (1) + "two three" (2) = 3 tokens
     expect(result.usage.prompt_tokens).toBe(3);
+  });
+
+  test("processes a token id array input and counts its tokens", async () => {
+    const { service } = makeService();
+    const result = await service.create({
+      model: "mock-model",
+      input: [0, 1, 2],
+      encoding_format: "float",
+    });
+
+    expect(result.data).toHaveLength(1);
+    // prompt_tokens is the length of the supplied token array
+    expect(result.usage.prompt_tokens).toBe(3);
+    expect(result.usage.total_tokens).toBe(3);
+    expect(result.data[0]!.embedding).toEqual([0.5, 0.5, 0.5, 0.5]);
+  });
+
+  test("processes an array of token id arrays input", async () => {
+    const { service } = makeService();
+    const result = await service.create({
+      model: "mock-model",
+      input: [
+        [0, 1],
+        [2, 3, 4],
+      ],
+      encoding_format: "float",
+    });
+
+    expect(result.data).toHaveLength(2);
+    expect(result.data[0]!.index).toBe(0);
+    expect(result.data[1]!.index).toBe(1);
+    expect(result.usage.prompt_tokens).toBe(5);
   });
 
   test("supports dimensions truncation and L2 re-normalization", async () => {
