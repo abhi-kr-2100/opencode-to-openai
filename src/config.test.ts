@@ -89,9 +89,7 @@ describe("loadConfig", () => {
 
   test("throws for empty or whitespace-only EMBEDDINGS_PRELOAD", () => {
     for (const value of ["", "   ", "\t\n "]) {
-      expect(() => loadConfig({ EMBEDDINGS_PRELOAD: value })).toThrow(
-        /invalid EMBEDDINGS_PRELOAD/,
-      );
+      expect(() => loadConfig({ EMBEDDINGS_PRELOAD: value })).toThrow(/invalid EMBEDDINGS_PRELOAD/);
     }
   });
 

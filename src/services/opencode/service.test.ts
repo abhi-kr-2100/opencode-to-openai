@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { access } from "node:fs/promises";
 import {
   assistantInfo,
   completionRequest,
@@ -8,7 +9,7 @@ import {
 import { OpencodeChatCompletionsService } from "./service.ts";
 
 describe("OpencodeChatCompletionsService (non-stream)", () => {
-  test("creates a completion through the opencode client", async () => {
+  test("creates a completion through the opencode client in an isolated tmp directory", async () => {
     const client = fakeClient({
       create: { data: { id: "session-1" } },
       prompt: {
@@ -25,6 +26,26 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     if (result.stream === true) throw new Error("expected a non-streaming result");
     expect(result.value.choices[0]?.message.content).toBe("hi there");
     expect(result.value.choices[0]?.finish_reason).toBe("stop");
+    expect(client.createCalls).toHaveLength(1);
+    const directory = client.createCalls[0]?.query?.directory;
+    expect(directory).toBeDefined();
+    expect(typeof directory).toBe("string");
+    expect(access(directory!)).rejects.toThrow();
+  });
+
+  test("cleans up the tmp directory even when prompting fails", async () => {
+    const client = fakeClient({
+      create: { data: { id: "session-1" } },
+      prompt: { error: new TypeError("prompt failed") },
+    });
+    const service = new OpencodeChatCompletionsService(client);
+
+    expect(service.create(completionRequest(StreamMode.NonStreaming))).rejects.toThrow();
+
+    expect(client.createCalls).toHaveLength(1);
+    const directory = client.createCalls[0]?.query?.directory;
+    expect(directory).toBeDefined();
+    expect(access(directory!)).rejects.toThrow();
   });
 
   test("forwards the system prompt to the opencode session", async () => {
@@ -129,6 +150,9 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     expect(service.create(completionRequest(StreamMode.NonStreaming))).rejects.toMatchObject({
       status: 502,
     });
+
+    const directory = client.createCalls[0]?.query?.directory;
+    expect(access(directory!)).rejects.toThrow();
   });
 
   test("maps session creation HTTP errors to their status", async () => {
@@ -148,6 +172,9 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
       status: 500,
       message: "opencode down",
     });
+
+    const directory = client.createCalls[0]?.query?.directory;
+    expect(access(directory!)).rejects.toThrow();
   });
 
   test("requires a prompt override before prompting the session", async () => {
