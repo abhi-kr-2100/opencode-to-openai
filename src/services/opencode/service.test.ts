@@ -51,6 +51,30 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     );
   });
 
+  test("forwards temperature and top_p into the scratch agent frontmatter", async () => {
+    const client = fakeClient({
+      create: { data: { id: "session-1" } },
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [{ type: "text", id: "p1", sessionID: "s", messageID: "m", text: "hi there" }],
+        },
+      },
+    });
+    const service = new OpencodeChatCompletionsService(client);
+
+    const result = await service.create({
+      ...completionRequest(StreamMode.NonStreaming),
+      temperature: 0.7,
+      top_p: 0.9,
+    });
+
+    if (result.stream === true) throw new Error("expected a non-streaming result");
+    expect(client.scratchAgents).toHaveLength(1);
+    expect(client.scratchAgents[0]?.content).toContain("temperature: 0.7");
+    expect(client.scratchAgents[0]?.content).toContain("top_p: 0.9");
+  });
+
   test("cleans up the tmp directory even when prompting fails", async () => {
     const client = fakeClient({
       create: { data: { id: "session-1" } },
