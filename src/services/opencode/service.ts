@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatCompletionRequest } from "../../openai/chat-completions.ts";
@@ -8,6 +8,9 @@ import { buildChunks, buildCompletion } from "./completion.ts";
 import { mapOpencodeError, mapSessionError } from "./errors.ts";
 import { parseModel } from "./model.ts";
 import { toPrompt } from "./prompt.ts";
+
+/** The opencode agent every request runs as. */
+const AGENT = "scratch";
 
 export class OpencodeChatCompletionsService implements ChatCompletionsService {
   readonly #client: OpencodeClient;
@@ -27,6 +30,8 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     let session: { id: string } | undefined;
 
     try {
+      await this.#writeScratchAgent(tmpDir);
+
       try {
         session = (
           await this.#client.session.create<true>({
@@ -40,7 +45,7 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
       try {
         const result = await this.#client.session.prompt<true>({
           path: { id: session.id },
-          body: { model, system: input.system, parts: input.parts },
+          body: { model, agent: AGENT, system: input.system, parts: input.parts },
         });
         if (result.data.info.error) throw mapSessionError(result.data.info.error);
         const completion = buildCompletion(request, result.data.info, result.data.parts);
@@ -62,6 +67,20 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
         await this.#deleteSession(session.id);
       }
     }
+  }
+
+  async #writeScratchAgent(dirPath: string): Promise<void> {
+    const agentsDir = join(dirPath, ".opencode", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    // The body must survive the loader's `.trim()` and stay truthy, or
+    // opencode's `agent.prompt ?` check falls back to its heavy base prompt.
+    const frontmatter = [
+      "description: A scratch agent with a minimal prompt and all tools denied.",
+      "mode: primary",
+      "permission:",
+      '  "*": deny',
+    ].join("\n");
+    await writeFile(join(agentsDir, "scratch.md"), `---\n${frontmatter}\n---\n.\n`);
   }
 
   async #deleteSession(sessionID: string): Promise<void> {

@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  assistantInfo,
-  completionRequest,
-  fakeClient,
-  StreamMode,
-} from "./opencode.ts";
+import { assistantInfo, completionRequest, fakeClient, StreamMode } from "./opencode.ts";
 
 async function withTmpDir(fn: (dir: string) => void | Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "opencode-test-"));
@@ -16,6 +11,12 @@ async function withTmpDir(fn: (dir: string) => void | Promise<void>): Promise<vo
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+async function withScratchAgent(dir: string): Promise<void> {
+  const agentsDir = join(dir, ".opencode", "agents");
+  await mkdir(agentsDir, { recursive: true });
+  await writeFile(join(agentsDir, "scratch.md"), ".\n");
 }
 
 describe("fakeClient", () => {
@@ -32,7 +33,8 @@ describe("fakeClient", () => {
   });
 
   test("creates a session in an existing directory", async () => {
-    await withTmpDir((dir) => {
+    await withTmpDir(async (dir) => {
+      await withScratchAgent(dir);
       const client = fakeClient({ create: { data: { id: "session-9" } } });
       const result = client.session.create({ query: { directory: dir } });
       expect(result).resolves.toEqual({ data: { id: "session-9" } });
@@ -42,9 +44,8 @@ describe("fakeClient", () => {
   test("rethrows the create error override", async () => {
     const client = fakeClient({ create: { error: new TypeError("fetch failed") } });
     await withTmpDir(async (dir) => {
-      expect(client.session.create({ query: { directory: dir } })).rejects.toThrow(
-        "fetch failed",
-      );
+      await withScratchAgent(dir);
+      expect(client.session.create({ query: { directory: dir } })).rejects.toThrow("fetch failed");
     });
   });
 

@@ -1,4 +1,5 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   AssistantMessage,
   Session,
@@ -49,9 +50,15 @@ export interface CreateSessionOptions {
   };
 }
 
+export interface ScratchAgentSnapshot {
+  path: string;
+  content: string;
+}
+
 interface FakeClient extends OpencodeClient {
   calls: { method: "prompt"; body: SessionPromptData["body"] }[];
   createCalls: CreateSessionOptions[];
+  scratchAgents: ScratchAgentSnapshot[];
   deleted: boolean;
 }
 
@@ -64,10 +71,12 @@ export function fakeClient(
 ): FakeClient {
   const calls: FakeClient["calls"] = [];
   const createCalls: CreateSessionOptions[] = [];
+  const scratchAgents: ScratchAgentSnapshot[] = [];
   let deleted = false;
   return {
     calls,
     createCalls,
+    scratchAgents,
     get deleted() {
       return deleted;
     },
@@ -79,6 +88,9 @@ export function fakeClient(
             "fakeClient: expected a directory that exists on disk when creating a session",
           );
         }
+        const scratchPath = join(options.query.directory, ".opencode", "agents", "scratch.md");
+        const content = await readFile(scratchPath, "utf8");
+        scratchAgents.push({ path: scratchPath, content });
         return resolve(overrides.create ?? { data: { id: "session-1" } });
       },
       prompt: async (options: { body: SessionPromptData["body"] }) => {

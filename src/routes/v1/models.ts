@@ -21,10 +21,7 @@ export function modelsHandler(
   };
 }
 
-function augmentWithEmbeddings(
-  data: Array<{ id: string }>,
-  embeddingsModelId: string,
-) {
+function augmentWithEmbeddings(data: Array<{ id: string }>, embeddingsModelId: string) {
   if (data.some((m) => m.id === embeddingsModelId)) {
     return data;
   }
