@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChatCompletionRequest } from "../../openai/chat-completions.ts";
 import type { OpencodeClient } from "../../opencode/client.ts";
 import type { ChatCompletionResult, ChatCompletionsService } from "../chat-completions.ts";
@@ -20,33 +23,44 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
       toolChoice: request.tool_choice,
     });
 
-    let session: { id: string };
-    try {
-      session = (await this.#client.session.create<true>({})).data;
-    } catch (error) {
-      throw mapOpencodeError(error);
-    }
+    const tmpDir = await mkdtemp(join(tmpdir(), "opencode-to-openai-"));
+    let session: { id: string } | undefined;
 
     try {
-      const result = await this.#client.session.prompt<true>({
-        path: { id: session.id },
-        body: { model, system: input.system, parts: input.parts },
-      });
-      if (result.data.info.error) throw mapSessionError(result.data.info.error);
-      const completion = buildCompletion(request, result.data.info, result.data.parts);
-      if (!request.stream) {
-        return { stream: false, value: completion };
+      try {
+        session = (
+          await this.#client.session.create<true>({
+            query: { directory: tmpDir },
+          })
+        ).data;
+      } catch (error) {
+        throw mapOpencodeError(error);
       }
-      return {
-        stream: true,
-        value: (async function* () {
-          yield* buildChunks(request, completion);
-        })(),
-      };
-    } catch (error) {
-      throw mapOpencodeError(error);
+
+      try {
+        const result = await this.#client.session.prompt<true>({
+          path: { id: session.id },
+          body: { model, system: input.system, parts: input.parts },
+        });
+        if (result.data.info.error) throw mapSessionError(result.data.info.error);
+        const completion = buildCompletion(request, result.data.info, result.data.parts);
+        if (!request.stream) {
+          return { stream: false, value: completion };
+        }
+        return {
+          stream: true,
+          value: (async function* () {
+            yield* buildChunks(request, completion);
+          })(),
+        };
+      } catch (error) {
+        throw mapOpencodeError(error);
+      }
     } finally {
-      await this.#deleteSession(session.id);
+      await this.#cleanupTmpDir(tmpDir);
+      if (session) {
+        await this.#deleteSession(session.id);
+      }
     }
   }
 
@@ -55,6 +69,14 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
       await this.#client.session.delete<true>({ path: { id: sessionID } });
     } catch {
       // Best effort cleanup; the session may already be gone.
+    }
+  }
+
+  async #cleanupTmpDir(dirPath: string): Promise<void> {
+    try {
+      await rm(dirPath, { recursive: true, force: true });
+    } catch {
+      // Best effort cleanup
     }
   }
 }

@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import type {
   AssistantMessage,
   Session,
@@ -33,8 +34,24 @@ async function resolve<T>(value: OkResult<T> | ErrorResult | Promise<T>): Promis
   return { data };
 }
 
+async function directoryExists(dir: string): Promise<boolean> {
+  try {
+    await access(dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface CreateSessionOptions {
+  query?: {
+    directory?: string;
+  };
+}
+
 interface FakeClient extends OpencodeClient {
   calls: { method: "prompt"; body: SessionPromptData["body"] }[];
+  createCalls: CreateSessionOptions[];
   deleted: boolean;
 }
 
@@ -46,22 +63,32 @@ export function fakeClient(
   } = {},
 ): FakeClient {
   const calls: FakeClient["calls"] = [];
+  const createCalls: CreateSessionOptions[] = [];
   let deleted = false;
   return {
     calls,
+    createCalls,
     get deleted() {
       return deleted;
     },
     session: {
-      create: () => resolve(overrides.create ?? { data: { id: "session-1" } }),
-      prompt: (options: { body: SessionPromptData["body"] }) => {
+      create: async (options: CreateSessionOptions = {}) => {
+        createCalls.push(options);
+        if (!options.query?.directory || !(await directoryExists(options.query.directory))) {
+          throw new Error(
+            "fakeClient: expected a directory that exists on disk when creating a session",
+          );
+        }
+        return resolve(overrides.create ?? { data: { id: "session-1" } });
+      },
+      prompt: async (options: { body: SessionPromptData["body"] }) => {
         calls.push({ method: "prompt", body: options.body });
         if (overrides.prompt === undefined) {
           throw new Error("fakeClient: overrides.prompt is required to call session.prompt");
         }
         return resolve(overrides.prompt);
       },
-      delete: () => {
+      delete: async () => {
         deleted = true;
         return resolve(overrides.delete ?? { data: true });
       },
