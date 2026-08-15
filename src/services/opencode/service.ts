@@ -30,7 +30,10 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     let session: { id: string } | undefined;
 
     try {
-      await this.#writeScratchAgent(tmpDir);
+      await this.#writeScratchAgent(tmpDir, {
+        temperature: request.temperature,
+        topP: request.top_p,
+      });
 
       try {
         session = (
@@ -69,7 +72,10 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     }
   }
 
-  async #writeScratchAgent(dirPath: string): Promise<void> {
+  async #writeScratchAgent(
+    dirPath: string,
+    options: { temperature?: number; topP?: number } = {},
+  ): Promise<void> {
     const agentsDir = join(dirPath, ".opencode", "agents");
     await mkdir(agentsDir, { recursive: true });
     // The body must survive the loader's `.trim()` and stay truthy, or
@@ -77,6 +83,8 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     const frontmatter = [
       "description: A scratch agent with a minimal prompt and all tools denied.",
       "mode: primary",
+      ...(options.temperature !== undefined ? [`temperature: ${options.temperature}`] : []),
+      ...(options.topP !== undefined ? [`top_p: ${options.topP}`] : []),
       "permission:",
       '  "*": deny',
     ].join("\n");
