@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { access } from "node:fs/promises";
+import { join } from "node:path";
 import {
   assistantInfo,
   completionRequest,
@@ -27,10 +28,27 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     expect(result.value.choices[0]?.message.content).toBe("hi there");
     expect(result.value.choices[0]?.finish_reason).toBe("stop");
     expect(client.createCalls).toHaveLength(1);
+    expect(client.calls[0]?.body).toMatchObject({ agent: "scratch" });
     const directory = client.createCalls[0]?.query?.directory;
     expect(directory).toBeDefined();
     expect(typeof directory).toBe("string");
     expect(access(directory!)).rejects.toThrow();
+    expect(client.scratchAgents).toHaveLength(1);
+    expect(client.scratchAgents[0]?.path).toBe(
+      join(directory!, ".opencode", "agents", "scratch.md"),
+    );
+    expect(client.scratchAgents[0]?.content).toBe(
+      [
+        "---",
+        "description: A scratch agent with a minimal prompt and all tools denied.",
+        "mode: primary",
+        "permission:",
+        '  "*": deny',
+        "---",
+        ".",
+        "",
+      ].join("\n"),
+    );
   });
 
   test("cleans up the tmp directory even when prompting fails", async () => {
@@ -68,6 +86,7 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     expect(client.calls[0]?.method).toBe("prompt");
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      agent: "scratch",
       system: "be terse",
       parts: [{ type: "text", text: "hi" }],
     });
@@ -97,6 +116,7 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
 
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      agent: "scratch",
       parts: [
         { type: "text", text: "user: hi\n\nassistant: hello" },
         { type: "text", text: "again" },
@@ -250,6 +270,7 @@ describe("OpencodeChatCompletionsService (stream)", () => {
     expect(client.calls[0]?.method).toBe("prompt");
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      agent: "scratch",
       parts: [{ type: "text", text: "hi" }],
     });
     expect(client.deleted).toBe(true);
