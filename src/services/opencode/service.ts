@@ -40,7 +40,7 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
       try {
         const result = await this.#client.session.prompt<true>({
           path: { id: session.id },
-          body: { model, system: input.system, parts: input.parts },
+          body: { model, agent: "scratch", system: input.system, parts: input.parts },
         });
         if (result.data.info.error) throw mapSessionError(result.data.info.error);
         const completion = buildCompletion(request, result.data.info, result.data.parts);

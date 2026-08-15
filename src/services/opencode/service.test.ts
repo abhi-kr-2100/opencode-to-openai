@@ -68,6 +68,7 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     expect(client.calls[0]?.method).toBe("prompt");
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      agent: "scratch",
       system: "be terse",
       parts: [{ type: "text", text: "hi" }],
     });
@@ -97,6 +98,7 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
 
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      agent: "scratch",
       parts: [
         { type: "text", text: "user: hi\n\nassistant: hello" },
         { type: "text", text: "again" },
@@ -250,6 +252,7 @@ describe("OpencodeChatCompletionsService (stream)", () => {
     expect(client.calls[0]?.method).toBe("prompt");
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
+      agent: "scratch",
       parts: [{ type: "text", text: "hi" }],
     });
     expect(client.deleted).toBe(true);
