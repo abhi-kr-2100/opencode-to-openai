@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatCompletionRequest } from "../../openai/chat-completions.ts";
@@ -27,6 +27,12 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     let session: { id: string } | undefined;
 
     try {
+      await mkdir(join(tmpDir, ".opencode", "agents"), { recursive: true });
+      await writeFile(
+        join(tmpDir, ".opencode", "agents", "scratch.md"),
+        `---\ndescription: Scratch agent with an empty system prompt\nmode: primary\n---\n`,
+      );
+
       try {
         session = (
           await this.#client.session.create<true>({

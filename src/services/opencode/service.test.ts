@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   assistantInfo,
   completionRequest,
@@ -31,6 +32,32 @@ describe("OpencodeChatCompletionsService (non-stream)", () => {
     expect(directory).toBeDefined();
     expect(typeof directory).toBe("string");
     expect(access(directory!)).rejects.toThrow();
+  });
+
+  test("creates a custom 'scratch' agent definition with an empty system prompt in the tmp directory", async () => {
+    let agentFileContent: string | undefined;
+    const client = fakeClient({
+      create: { data: { id: "session-1" } },
+      prompt: { data: { info: assistantInfo(), parts: [] } },
+    });
+
+    const originalCreate = client.session.create;
+    client.session.create = async (options) => {
+      if (options.query?.directory) {
+        agentFileContent = await readFile(
+          join(options.query.directory, ".opencode", "agents", "scratch.md"),
+          "utf-8",
+        );
+      }
+      return originalCreate(options);
+    };
+
+    const service = new OpencodeChatCompletionsService(client);
+    await service.create(completionRequest(StreamMode.NonStreaming));
+
+    expect(agentFileContent).toBe(
+      "---\ndescription: Scratch agent with an empty system prompt\nmode: primary\n---\n",
+    );
   });
 
   test("cleans up the tmp directory even when prompting fails", async () => {

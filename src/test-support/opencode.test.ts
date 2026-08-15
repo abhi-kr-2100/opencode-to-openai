@@ -2,12 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  assistantInfo,
-  completionRequest,
-  fakeClient,
-  StreamMode,
-} from "./opencode.ts";
+import { assistantInfo, completionRequest, fakeClient, StreamMode } from "./opencode.ts";
 
 async function withTmpDir(fn: (dir: string) => void | Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "opencode-test-"));
@@ -42,9 +37,7 @@ describe("fakeClient", () => {
   test("rethrows the create error override", async () => {
     const client = fakeClient({ create: { error: new TypeError("fetch failed") } });
     await withTmpDir(async (dir) => {
-      expect(client.session.create({ query: { directory: dir } })).rejects.toThrow(
-        "fetch failed",
-      );
+      expect(client.session.create({ query: { directory: dir } })).rejects.toThrow("fetch failed");
     });
   });
 
