@@ -13,7 +13,7 @@ export function buildRouter(
 ): Router {
   const router = new Router();
   router.register("POST", "/v1/chat/completions", chatCompletionsHandler(chatCompletions));
-  router.register("GET", "/v1/models", modelsHandler(models));
+  router.register("GET", "/v1/models", modelsHandler(models, embeddings));
   router.register("POST", "/v1/embeddings", embeddingsHandler(embeddings));
   return router;
 }

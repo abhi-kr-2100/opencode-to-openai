@@ -39,6 +39,11 @@ describe("e2e GET /v1/models (real opencode server)", () => {
     const e2eModel = body.data.find((model) => model.id === E2E_MODEL);
     expect(e2eModel).toBeDefined();
     expect(e2eModel?.object).toBe("model");
+
+    const embeddingsModel = body.data.find((model) => model.id === stubEmbeddings.modelName);
+    expect(embeddingsModel).toBeDefined();
+    expect(embeddingsModel?.object).toBe("model");
+    expect(embeddingsModel?.owned_by).toBe("Xenova");
   });
 
   test("returns 502 when the opencode server is unreachable", async () => {
