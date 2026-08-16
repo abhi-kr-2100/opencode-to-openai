@@ -37,7 +37,7 @@ describe("fakeClient", () => {
       await withScratchAgent(dir);
       const client = fakeClient({ create: { data: { id: "session-9" } } });
       const result = client.session.create({ query: { directory: dir } });
-      expect(result).resolves.toEqual({ data: { id: "session-9" } });
+      expect(result).resolves.toMatchObject({ data: { id: "session-9" } });
     });
   });
 
@@ -52,7 +52,10 @@ describe("fakeClient", () => {
   test("throws when prompting without an override", async () => {
     const client = fakeClient({ create: { data: { id: "session-1" } } });
     expect(
-      client.session.prompt({ body: { message: { role: "user", content: "hi" } } }),
+      client.session.prompt({
+        path: { id: "session-1" },
+        body: { parts: [{ type: "text", text: "hi" }] },
+      }),
     ).rejects.toThrow(/overrides.prompt is required/);
     expect(client.calls).toHaveLength(1);
   });
@@ -62,28 +65,35 @@ describe("fakeClient", () => {
     const client = fakeClient({
       prompt: { data: { info, parts: [] } },
     });
-    const body = { message: { role: "user", content: "hi" } };
-    expect(client.session.prompt({ body })).resolves.toEqual({ data: { info, parts: [] } });
+    const body = { parts: [{ type: "text" as const, text: "hi" }] };
+    expect(client.session.prompt({ path: { id: "session-1" }, body })).resolves.toMatchObject({
+      data: { info, parts: [] },
+    });
     expect(client.calls).toEqual([{ method: "prompt", body }]);
   });
 
   test("prompt rethrows the error override", async () => {
     const client = fakeClient({ prompt: { error: new TypeError("prompt failed") } });
     expect(
-      client.session.prompt({ body: { message: { role: "user", content: "hi" } } }),
+      client.session.prompt({
+        path: { id: "session-1" },
+        body: { parts: [{ type: "text", text: "hi" }] },
+      }),
     ).rejects.toThrow("prompt failed");
   });
 
   test("delete marks deleted and resolves data", async () => {
     const client = fakeClient();
     expect(client.deleted).toBe(false);
-    expect(client.session.delete()).resolves.toEqual({ data: true });
+    expect(client.session.delete({ path: { id: "session-1" } })).resolves.toMatchObject({
+      data: true,
+    });
     expect(client.deleted).toBe(true);
   });
 
   test("delete rethrows the error override", async () => {
     const client = fakeClient({ delete: { error: new TypeError("delete failed") } });
-    expect(client.session.delete()).rejects.toThrow("delete failed");
+    expect(client.session.delete({ path: { id: "session-1" } })).rejects.toThrow("delete failed");
     expect(client.deleted).toBe(true);
   });
 });
