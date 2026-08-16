@@ -1,4 +1,5 @@
 import type { AssistantMessage, Part, TextPart } from "@opencode-ai/sdk";
+import { BadGatewayError } from "../../http/errors.ts";
 import type {
   ChatCompletion,
   ChatCompletionChunk,
@@ -8,6 +9,8 @@ import type {
   ChatCompletionToolCall,
   ChatCompletionUsage,
 } from "../../openai/chat-completions.ts";
+import { mapSessionError } from "./errors.ts";
+import { isRecord } from "./guards.ts";
 import { newToolCallId, type ParsedToolCall, splitToolCalls } from "./tools.ts";
 
 /**
@@ -172,6 +175,193 @@ export function buildChunks(
     chunks.push({ ...base, choices: [], usage: completion.usage });
   }
   return chunks;
+}
+
+/**
+ * Transforms an OpenCode event stream into an OpenAI streaming completion chunk sequence.
+ */
+export async function* streamEventsToChunks(
+  request: ChatCompletionRequest,
+  sessionID: string,
+  events: AsyncIterable<unknown> | Iterable<unknown>,
+): AsyncGenerator<ChatCompletionChunk> {
+  const id = `chatcmpl-${crypto.randomUUID()}`;
+  const created = Math.floor(Date.now() / 1000);
+  const base = {
+    id,
+    object: "chat.completion.chunk" as const,
+    created,
+    model: request.model,
+  };
+
+  // Emit initial opening chunk carrying { role: "assistant", content: "" }
+  yield {
+    ...base,
+    choices: [
+      {
+        index: 0,
+        delta: { role: "assistant", content: "" },
+        finish_reason: null,
+        logprobs: null,
+      },
+    ],
+  };
+
+  let accumulatedRawText = "";
+  let emittedContentLength = 0;
+  let assistantInfo: AssistantMessage | undefined;
+
+  const partTextLengths = new Map<string, number>();
+
+  for await (const rawEvent of events) {
+    if (!isRecord(rawEvent)) continue;
+    const type = rawEvent.type;
+    const properties = isRecord(rawEvent.properties) ? rawEvent.properties : {};
+
+    if (type === "session.error") {
+      if (properties.sessionID === undefined || properties.sessionID === sessionID) {
+        if (properties.error) throw mapSessionError(properties.error);
+        throw new BadGatewayError("the opencode session failed");
+      }
+    }
+
+    if (type === "message.part.updated") {
+      const part = isRecord(properties.part) ? properties.part : null;
+      if (part && part.sessionID === sessionID && part.type === "text") {
+        const partID = typeof part.id === "string" ? part.id : "";
+        let deltaText = typeof properties.delta === "string" ? properties.delta : "";
+        const fullText = typeof part.text === "string" ? part.text : "";
+
+        if (deltaText.length === 0 && fullText.length > 0) {
+          const prevLen = partTextLengths.get(partID) ?? 0;
+          if (fullText.length > prevLen) {
+            deltaText = fullText.slice(prevLen);
+            partTextLengths.set(partID, fullText.length);
+          }
+        } else if (fullText.length > 0) {
+          partTextLengths.set(partID, fullText.length);
+        }
+
+        if (deltaText.length > 0) {
+          accumulatedRawText += deltaText;
+
+          if (!accumulatedRawText.includes("<tool_call>")) {
+            yield {
+              ...base,
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: deltaText },
+                  finish_reason: null,
+                  logprobs: null,
+                },
+              ],
+            };
+            emittedContentLength += deltaText.length;
+          }
+        }
+      }
+    }
+
+    if (type === "message.updated") {
+      const info = isRecord(properties.info) ? properties.info : null;
+      if (info && info.sessionID === sessionID && info.role === "assistant") {
+        if (info.error) throw mapSessionError(info.error);
+        assistantInfo = info as unknown as AssistantMessage;
+      }
+    }
+
+    if (type === "session.idle") {
+      if (properties.sessionID === sessionID) {
+        break;
+      }
+    }
+  }
+
+  const { content, calls } = splitToolCalls(accumulatedRawText);
+
+  const toolCalls = calls.map(toToolCall);
+  if (toolCalls.length > 0) {
+    const unEmittedContent = content.slice(emittedContentLength);
+    if (unEmittedContent.length > 0) {
+      yield {
+        ...base,
+        choices: [
+          {
+            index: 0,
+            delta: { content: unEmittedContent },
+            finish_reason: null,
+            logprobs: null,
+          },
+        ],
+      };
+    }
+    for (const [callIndex, call] of toolCalls.entries()) {
+      const fragments = fragmentArguments(call.function.arguments);
+      for (const [offset, fragment] of fragments.entries()) {
+        yield {
+          ...base,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  offset === 0
+                    ? {
+                        index: callIndex,
+                        id: call.id,
+                        type: "function",
+                        function: { name: call.function.name, arguments: fragment },
+                      }
+                    : { index: callIndex, function: { arguments: fragment } },
+                ],
+              },
+              finish_reason: null,
+              logprobs: null,
+            },
+          ],
+        };
+      }
+    }
+  } else {
+    const unEmittedContent = accumulatedRawText.slice(emittedContentLength);
+    if (unEmittedContent.length > 0) {
+      yield {
+        ...base,
+        choices: [
+          {
+            index: 0,
+            delta: { content: unEmittedContent },
+            finish_reason: null,
+            logprobs: null,
+          },
+        ],
+      };
+    }
+  }
+
+  const finishReason: ChatCompletionFinishReason =
+    toolCalls.length > 0 ? "tool_calls" : mapFinishReason(assistantInfo?.finish);
+
+  yield {
+    ...base,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: finishReason,
+        logprobs: null,
+      },
+    ],
+  };
+
+  if (request.stream_options?.include_usage && assistantInfo) {
+    yield {
+      ...base,
+      choices: [],
+      usage: toUsage(assistantInfo),
+    };
+  }
 }
 
 /** The longest `arguments` snippet a single tool-call frame may carry. */

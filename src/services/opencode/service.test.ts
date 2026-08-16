@@ -274,7 +274,7 @@ describe("OpencodeChatCompletionsService (stream)", () => {
     const result = await service.create(completionRequest(StreamMode.Streaming));
     if (result.stream === false) throw new Error("expected a streaming result");
 
-    expect(client.deleted).toBe(true);
+    expect(client.deleted).toBe(false);
     const chunks = [];
     for await (const chunk of result.value) chunks.push(chunk);
 
@@ -291,12 +291,37 @@ describe("OpencodeChatCompletionsService (stream)", () => {
     expect(chunks[2]?.choices[0]?.finish_reason).toBe("stop");
 
     expect(client.calls).toHaveLength(1);
-    expect(client.calls[0]?.method).toBe("prompt");
+    expect(client.calls[0]?.method).toBe("promptAsync");
     expect(client.calls[0]?.body).toEqual({
       model: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" },
       agent: "scratch",
       parts: [{ type: "text", text: "hi" }],
     });
+    expect(client.deleted).toBe(true);
+  });
+
+  test("cleans up session and tmp directory when stream iteration is aborted early", async () => {
+    const client = fakeClient({
+      create: { data: { id: "session-1" } },
+      prompt: {
+        data: {
+          info: assistantInfo({ finish: "end_turn" }),
+          parts: [{ type: "text", id: "p1", sessionID: "s", messageID: "m", text: "hi there" }],
+        },
+      },
+    });
+    const service = new OpencodeChatCompletionsService(client);
+
+    const result = await service.create(completionRequest(StreamMode.Streaming));
+    if (result.stream === false) throw new Error("expected a streaming result");
+
+    const iterator = result.value[Symbol.asyncIterator]();
+    await iterator.next(); // Read initial chunk
+    expect(client.deleted).toBe(false);
+
+    if (iterator.return) {
+      await iterator.return();
+    }
     expect(client.deleted).toBe(true);
   });
 

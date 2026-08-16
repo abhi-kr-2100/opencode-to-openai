@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { Part } from "@opencode-ai/sdk";
 import type { ChatCompletion } from "../../openai/chat-completions.ts";
 import { assistantInfo } from "@/test-support/opencode.ts";
-import { buildChunks, buildCompletion, mapFinishReason, toUsage } from "./completion.ts";
+import {
+  buildChunks,
+  buildCompletion,
+  mapFinishReason,
+  streamEventsToChunks,
+  toUsage,
+} from "./completion.ts";
 
 describe("toUsage", () => {
   test("maps opencode token counts", () => {
@@ -85,6 +91,114 @@ describe("buildCompletion", () => {
     expect(completion.choices[0]?.message.content).toBe("Checking now. ");
     expect(completion.choices[0]?.message.tool_calls).toHaveLength(1);
     expect(completion.choices[0]?.finish_reason).toBe("tool_calls");
+  });
+});
+
+describe("streamEventsToChunks", () => {
+  test("yields incremental text chunks from message.part.updated deltas", async () => {
+    const request = { model: "anthropic/claude-3-5-sonnet-20241022", stream: true, messages: [] };
+    const sessionID = "session-1";
+    const events = [
+      {
+        type: "message.part.updated",
+        properties: {
+          part: { id: "p1", sessionID, type: "text", text: "Hello " },
+          delta: "Hello ",
+        },
+      },
+      {
+        type: "message.part.updated",
+        properties: {
+          part: { id: "p1", sessionID, type: "text", text: "Hello world" },
+          delta: "world",
+        },
+      },
+      {
+        type: "message.updated",
+        properties: { info: assistantInfo({ sessionID, finish: "end_turn" }) },
+      },
+      {
+        type: "session.idle",
+        properties: { sessionID },
+      },
+    ];
+
+    const chunks = [];
+    for await (const chunk of streamEventsToChunks(request, sessionID, events)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(4);
+    expect(chunks[0]?.choices[0]?.delta).toEqual({ role: "assistant", content: "" });
+    expect(chunks[1]?.choices[0]?.delta).toEqual({ content: "Hello " });
+    expect(chunks[2]?.choices[0]?.delta).toEqual({ content: "world" });
+    expect(chunks[3]?.choices[0]?.delta).toEqual({});
+    expect(chunks[3]?.choices[0]?.finish_reason).toBe("stop");
+  });
+
+  test("yields emulated tool calls and usage when requested", async () => {
+    const request = {
+      model: "anthropic/claude-3-5-sonnet-20241022",
+      stream: true,
+      messages: [],
+      stream_options: { include_usage: true },
+    };
+    const sessionID = "session-1";
+    const events = [
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "p1",
+            sessionID,
+            type: "text",
+            text: '<tool_call>{"name":"get_weather","arguments":{"city":"SF"}}</tool_call>',
+          },
+          delta: '<tool_call>{"name":"get_weather","arguments":{"city":"SF"}}</tool_call>',
+        },
+      },
+      {
+        type: "message.updated",
+        properties: { info: assistantInfo({ sessionID, finish: "end_turn" }) },
+      },
+      {
+        type: "session.idle",
+        properties: { sessionID },
+      },
+    ];
+
+    const chunks = [];
+    for await (const chunk of streamEventsToChunks(request, sessionID, events)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks[0]?.choices[0]?.delta).toEqual({ role: "assistant", content: "" });
+    const toolCallDelta = chunks[1]?.choices[0]?.delta.tool_calls?.[0];
+    expect(toolCallDelta?.function?.name).toBe("get_weather");
+    expect(toolCallDelta?.function?.arguments).toBe('{"city":"SF"}');
+    const finishChunk = chunks.find((c) => c.choices[0]?.finish_reason !== null);
+    expect(finishChunk?.choices[0]?.finish_reason).toBe("tool_calls");
+    const usageChunk = chunks.at(-1);
+    expect(usageChunk?.choices).toEqual([]);
+    expect(usageChunk?.usage?.total_tokens).toBe(21);
+  });
+
+  test("throws error on session.error event", async () => {
+    const request = { model: "anthropic/claude-3-5-sonnet-20241022", stream: true, messages: [] };
+    const sessionID = "session-1";
+    const events = [
+      {
+        type: "session.error",
+        properties: {
+          sessionID,
+          error: { name: "UnknownError", data: { message: "backend stream failed" } },
+        },
+      },
+    ];
+
+    const generator = streamEventsToChunks(request, sessionID, events);
+    await generator.next(); // opening chunk
+    await expect(generator.next()).rejects.toThrow("backend stream failed");
   });
 });
 

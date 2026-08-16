@@ -56,7 +56,7 @@ export interface ScratchAgentSnapshot {
 }
 
 interface FakeClient extends OpencodeClient {
-  calls: { method: "prompt"; body: SessionPromptData["body"] }[];
+  calls: { method: "prompt" | "promptAsync"; body: SessionPromptData["body"] }[];
   createCalls: CreateSessionOptions[];
   scratchAgents: ScratchAgentSnapshot[];
   deleted: boolean;
@@ -66,6 +66,9 @@ export function fakeClient(
   overrides: {
     create?: FakeResult<Pick<Session, "id">>;
     prompt?: FakeResult<SessionPromptResponse>;
+    events?: FakeResult<unknown[]>;
+    subscribeError?: unknown;
+    promptAsyncError?: unknown;
     delete?: FakeResult<boolean>;
   } = {},
 ): FakeClient {
@@ -79,6 +82,46 @@ export function fakeClient(
     scratchAgents,
     get deleted() {
       return deleted;
+    },
+    event: {
+      subscribe: async () => {
+        if (overrides.subscribeError !== undefined) {
+          throw overrides.subscribeError;
+        }
+        let eventsList: unknown[] = [];
+        if (overrides.events !== undefined) {
+          if (isErrorResult(overrides.events)) throw overrides.events.error;
+          eventsList = overrides.events.data;
+        } else if (overrides.prompt !== undefined && !isErrorResult(overrides.prompt)) {
+          const info = overrides.prompt.data.info;
+          const parts = overrides.prompt.data.parts ?? [];
+          const sessionID = info.sessionID || "session-1";
+          eventsList = [
+            ...parts.map((p) => ({
+              type: "message.part.updated",
+              properties: {
+                part: { ...p, sessionID },
+                delta: p.type === "text" ? p.text : undefined,
+              },
+            })),
+            {
+              type: "message.updated",
+              properties: { info: { ...info, sessionID } },
+            },
+            {
+              type: "session.idle",
+              properties: { sessionID },
+            },
+          ];
+        }
+        return {
+          stream: (async function* () {
+            for (const ev of eventsList) {
+              yield ev;
+            }
+          })(),
+        };
+      },
     },
     session: {
       create: async (options: CreateSessionOptions = {}) => {
@@ -99,6 +142,13 @@ export function fakeClient(
           throw new Error("fakeClient: overrides.prompt is required to call session.prompt");
         }
         return resolve(overrides.prompt);
+      },
+      promptAsync: async (options: { body: SessionPromptData["body"] }) => {
+        calls.push({ method: "promptAsync", body: options.body });
+        if (overrides.promptAsyncError !== undefined) {
+          throw overrides.promptAsyncError;
+        }
+        return resolve({ data: true });
       },
       delete: async () => {
         deleted = true;
