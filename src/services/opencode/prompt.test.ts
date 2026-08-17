@@ -293,6 +293,13 @@ describe("toPrompt", () => {
     );
   });
 
+  test("appends response format instructions to the system prompt", () => {
+    const prompt = toPrompt([{ role: "user", content: "hi" }], {
+      responseFormat: { type: "json_object" },
+    });
+    expect(prompt.system).toContain("You must respond with a valid JSON object.");
+  });
+
   test("appends tool instructions to the system prompt", () => {
     const tools: NonNullable<ChatCompletionRequest["tools"]> = [
       {

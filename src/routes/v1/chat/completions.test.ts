@@ -72,6 +72,62 @@ describe("POST /v1/chat/completions", () => {
     expect(response.status).toBe(400);
   });
 
+  test("accepts response_format with json_schema", async () => {
+    let capturedRequest: ChatCompletionRequest | undefined;
+    const router = new Router();
+    router.register(
+      "POST",
+      "/v1/chat/completions",
+      chatCompletionsHandler(
+        new FakeChatCompletionsService((req) => {
+          capturedRequest = req;
+          return {
+            stream: false,
+            value: {
+              id: "chatcmpl-1",
+              object: "chat.completion",
+              created: 1,
+              model: "gpt-4o",
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: "{}" },
+                  finish_reason: "stop",
+                  logprobs: null,
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            },
+          };
+        }),
+      ),
+    );
+
+    const response = await router.handle(
+      postJson({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: "hi" }],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "test_schema",
+            schema: { type: "object" },
+          },
+        },
+      }),
+      stubServer,
+    );
+
+    expect(response.status).toBe(200);
+    expect(capturedRequest?.response_format).toEqual({
+      type: "json_schema",
+      json_schema: {
+        name: "test_schema",
+        schema: { type: "object" },
+      },
+    });
+  });
+
   test("returns 404 for an unknown route", async () => {
     const response = await handle(
       new Request("http://localhost/v1/embeddings", { method: "POST" }),
