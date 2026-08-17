@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 
 const DEFAULTS = {
@@ -10,24 +12,24 @@ const DEFAULTS = {
 };
 
 describe("loadConfig", () => {
-  test("defaults host, port, and opencode url", () => {
-    expect(loadConfig({})).toEqual(DEFAULTS);
+  test("defaults host, port, and opencode url when no args or config file exist", () => {
+    expect(loadConfig([])).toEqual(DEFAULTS);
   });
 
-  test("treats empty or whitespace-only OPENCODE_URL as unset", () => {
-    expect(loadConfig({ OPENCODE_URL: "" })).toEqual(DEFAULTS);
-    expect(loadConfig({ OPENCODE_URL: "   " })).toEqual(DEFAULTS);
-  });
-
-  test("reads PORT, HOST, and OPENCODE_URL from env", () => {
+  test("reads CLI flags", () => {
     expect(
-      loadConfig({
-        PORT: "9000",
-        HOST: "0.0.0.0",
-        OPENCODE_URL: "http://opencode.example:7777",
-        EMBEDDINGS_MODEL: "Xenova/all-MiniLM-L6-v2",
-        EMBEDDINGS_PRELOAD: "true",
-      }),
+      loadConfig([
+        "--port",
+        "9000",
+        "--host",
+        "0.0.0.0",
+        "--opencode-url",
+        "http://opencode.example:7777",
+        "--embeddings-model",
+        "Xenova/all-MiniLM-L6-v2",
+        "--embeddings-preload",
+        "true",
+      ]),
     ).toEqual({
       host: "0.0.0.0",
       port: 9000,
@@ -37,15 +39,20 @@ describe("loadConfig", () => {
     });
   });
 
-  test("trims whitespace", () => {
+  test("trims whitespace from string CLI flags", () => {
     expect(
-      loadConfig({
-        PORT: " 8123 ",
-        HOST: " localhost ",
-        OPENCODE_URL: " http://opencode.example:7777 ",
-        EMBEDDINGS_MODEL: " Xenova/all-MiniLM-L6-v2 ",
-        EMBEDDINGS_PRELOAD: " true ",
-      }),
+      loadConfig([
+        "--port",
+        " 8123 ",
+        "--host",
+        " localhost ",
+        "--opencode-url",
+        " http://opencode.example:7777 ",
+        "--embeddings-model",
+        " Xenova/all-MiniLM-L6-v2 ",
+        "--embeddings-preload",
+        " true ",
+      ]),
     ).toEqual({
       host: "localhost",
       port: 8123,
@@ -56,45 +63,132 @@ describe("loadConfig", () => {
   });
 
   test("accepts boundary ports", () => {
-    expect(loadConfig({ PORT: "0" }).port).toBe(0);
-    expect(loadConfig({ PORT: "65535" }).port).toBe(65_535);
+    expect(loadConfig(["--port", "0"]).port).toBe(0);
+    expect(loadConfig(["--port", "65535"]).port).toBe(65_535);
   });
 
-  test("throws for a non-numeric port", () => {
-    expect(() => loadConfig({ PORT: "abc" })).toThrow(/invalid PORT/);
+  test("throws for a non-numeric port in CLI args", () => {
+    expect(() => loadConfig(["--port", "abc"])).toThrow(/invalid port/);
   });
 
-  test("throws for an out-of-range port", () => {
-    expect(() => loadConfig({ PORT: "-1" })).toThrow(/invalid PORT/);
-    expect(() => loadConfig({ PORT: "65536" })).toThrow(/invalid PORT/);
+  test("throws for an out-of-range port in CLI args", () => {
+    expect(() => loadConfig(["--port=65536"])).toThrow(/invalid port/);
   });
 
-  test("throws for a malformed OPENCODE_URL", () => {
-    expect(() => loadConfig({ OPENCODE_URL: "not a url" })).toThrow(/invalid OPENCODE_URL/);
+  test("throws for a malformed opencode-url", () => {
+    expect(() => loadConfig(["--opencode-url", "not a url"])).toThrow(/invalid opencodeUrl/);
   });
 
-  test("throws for a non-http(s) OPENCODE_URL", () => {
-    expect(() => loadConfig({ OPENCODE_URL: "ftp://example.com" })).toThrow(/invalid OPENCODE_URL/);
+  test("throws for a non-http(s) opencode-url", () => {
+    expect(() => loadConfig(["--opencode-url", "ftp://example.com"])).toThrow(
+      /invalid opencodeUrl/,
+    );
   });
 
-  test("reads EMBEDDINGS_PRELOAD false", () => {
-    expect(loadConfig({ EMBEDDINGS_PRELOAD: "false" }).embeddingsPreload).toBe(false);
+  test("reads embeddings-preload false", () => {
+    expect(loadConfig(["--embeddings-preload", "false"]).embeddingsPreload).toBe(false);
   });
 
-  test("throws for non-boolean EMBEDDINGS_PRELOAD values", () => {
+  test("throws for non-boolean embeddings-preload values", () => {
     for (const value of ["1", "0", "yes", "no", "on", "y", "n", " random "]) {
-      expect(() => loadConfig({ EMBEDDINGS_PRELOAD: value })).toThrow(/invalid EMBEDDINGS_PRELOAD/);
+      expect(() => loadConfig(["--embeddings-preload", value])).toThrow(
+        /invalid embeddingsPreload/,
+      );
     }
   });
 
-  test("throws for empty or whitespace-only EMBEDDINGS_PRELOAD", () => {
-    for (const value of ["", "   ", "\t\n "]) {
-      expect(() => loadConfig({ EMBEDDINGS_PRELOAD: value })).toThrow(/invalid EMBEDDINGS_PRELOAD/);
+  test("accepts case-insensitive embeddings-preload booleans", () => {
+    expect(loadConfig(["--embeddings-preload", "TRUE"]).embeddingsPreload).toBe(true);
+    expect(loadConfig(["--embeddings-preload", "False"]).embeddingsPreload).toBe(false);
+  });
+
+  test("loads configuration from custom JSON config file", () => {
+    const tmpDir = join(process.cwd(), ".tmp-config-test-1");
+    mkdirSync(tmpDir, { recursive: true });
+    const configPath = join(tmpDir, "custom.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        host: "10.0.0.1",
+        port: 4000,
+        opencodeUrl: "http://10.0.0.1:4096",
+        embeddingsModel: "custom-model",
+        embeddingsPreload: true,
+      }),
+      "utf8",
+    );
+
+    try {
+      expect(loadConfig({ configFilePath: configPath, args: [] })).toEqual({
+        host: "10.0.0.1",
+        port: 4000,
+        opencodeUrl: "http://10.0.0.1:4096",
+        embeddingsModel: "custom-model",
+        embeddingsPreload: true,
+      });
+
+      expect(loadConfig(["--config", configPath])).toEqual({
+        host: "10.0.0.1",
+        port: 4000,
+        opencodeUrl: "http://10.0.0.1:4096",
+        embeddingsModel: "custom-model",
+        embeddingsPreload: true,
+      });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("accepts case-insensitive EMBEDDINGS_PRELOAD booleans", () => {
-    expect(loadConfig({ EMBEDDINGS_PRELOAD: "TRUE" }).embeddingsPreload).toBe(true);
-    expect(loadConfig({ EMBEDDINGS_PRELOAD: "False" }).embeddingsPreload).toBe(false);
+  test("CLI flags take precedence over config file values", () => {
+    const tmpDir = join(process.cwd(), ".tmp-config-test-2");
+    mkdirSync(tmpDir, { recursive: true });
+    const configPath = join(tmpDir, "custom.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        host: "10.0.0.1",
+        port: 4000,
+        opencodeUrl: "http://10.0.0.1:4096",
+        embeddingsModel: "file-model",
+        embeddingsPreload: false,
+      }),
+      "utf8",
+    );
+
+    try {
+      const config = loadConfig([
+        "--config",
+        configPath,
+        "--port",
+        "5000",
+        "--embeddings-model",
+        "cli-model",
+        "--embeddings-preload",
+        "true",
+      ]);
+
+      expect(config).toEqual({
+        host: "10.0.0.1",
+        port: 5000,
+        opencodeUrl: "http://10.0.0.1:4096",
+        embeddingsModel: "cli-model",
+        embeddingsPreload: true,
+      });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("throws on invalid JSON in config file", () => {
+    const tmpDir = join(process.cwd(), ".tmp-config-test-3");
+    mkdirSync(tmpDir, { recursive: true });
+    const configPath = join(tmpDir, "bad.json");
+    writeFileSync(configPath, "{ invalid json", "utf8");
+
+    try {
+      expect(() => loadConfig(["--config", configPath])).toThrow(/invalid JSON in config file/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

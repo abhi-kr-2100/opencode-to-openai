@@ -1,6 +1,6 @@
 import { createOpencodeServer, type ServerOptions } from "@opencode-ai/sdk";
 import { buildRouter } from "./app.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, type Config, type LoadConfigOptions } from "./config.ts";
 import { createOpencodeHttpClient } from "./opencode/client.ts";
 import { createServer } from "./server.ts";
 import {
@@ -12,6 +12,7 @@ import { OpencodeChatCompletionsService } from "./services/opencode/service.ts";
 import { displayAddress } from "./utils/net.ts";
 
 export interface StartOptions {
+  config?: Config | LoadConfigOptions | string[];
   createOpencodeServer?: (options: ServerOptions) => Promise<{ url: string; close(): void }>;
   buildEmbeddingsPipeline?: FeatureExtractionPipeline;
 }
@@ -21,7 +22,15 @@ export interface StartResult {
 }
 
 export async function start(options: StartOptions = {}): Promise<StartResult> {
-  const config = loadConfig();
+  let config: Config;
+  if (options.config && "host" in options.config && "port" in options.config) {
+    config = options.config as Config;
+  } else if (options.config) {
+    config = loadConfig(options.config as LoadConfigOptions | string[]);
+  } else {
+    config = loadConfig();
+  }
+
   const createEmbeddedServer = options.createOpencodeServer ?? createOpencodeServer;
 
   let opencodeUrl = config.opencodeUrl;
