@@ -10,6 +10,13 @@ export type ChatCompletionResult =
   | { stream: false; value: ChatCompletion }
   | { stream: true; value: AsyncIterable<ChatCompletionChunk> };
 
+export interface ChatCompletionsServiceOptions {
+  password?: string | null;
+}
+
 export interface ChatCompletionsService {
-  create(request: ChatCompletionRequest): Promise<ChatCompletionResult>;
+  create(
+    request: ChatCompletionRequest,
+    options?: ChatCompletionsServiceOptions,
+  ): Promise<ChatCompletionResult>;
 }

@@ -4,7 +4,12 @@ import { sseResponse } from "../../../http/sse.ts";
 import { chatCompletionRequestSchema } from "../../../openai/chat-completions.ts";
 import type { RouteHandler } from "../../../router.ts";
 import type { ChatCompletionsService } from "../../../services/chat-completions.ts";
-import { formatValidationError, parseJsonBody, streamWithDone } from "../../../utils/http.ts";
+import {
+  extractBearerToken,
+  formatValidationError,
+  parseJsonBody,
+  streamWithDone,
+} from "../../../utils/http.ts";
 
 export function chatCompletionsHandler(service: ChatCompletionsService): RouteHandler {
   return async (request, server) => {
@@ -17,7 +22,8 @@ export function chatCompletionsHandler(service: ChatCompletionsService): RouteHa
       server.timeout(request, 0);
     }
 
-    const result = await service.create(parsed.data);
+    const password = extractBearerToken(request);
+    const result = await service.create(parsed.data, password ? { password } : undefined);
     if (result.stream) {
       return sseResponse(streamWithDone(result.value));
     }

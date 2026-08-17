@@ -1,18 +1,24 @@
 import type { ModelsList } from "../../openai/models.ts";
-import type { OpencodeClient } from "../../opencode/client.ts";
-import type { ModelsService } from "../models.ts";
+import { createOpencodeHttpClient, type OpencodeClient } from "../../opencode/client.ts";
+import type { ModelsService, ModelsServiceOptions } from "../models.ts";
 import { mapOpencodeError } from "./errors.ts";
 
 export class OpencodeModelsService implements ModelsService {
   readonly #client: OpencodeClient;
+  readonly #baseUrl?: string;
 
-  constructor(client: OpencodeClient) {
+  constructor(client: OpencodeClient, options?: { baseUrl?: string }) {
     this.#client = client;
+    this.#baseUrl = options?.baseUrl;
   }
 
-  async list(): Promise<ModelsList> {
+  async list(options?: ModelsServiceOptions): Promise<ModelsList> {
+    const client = options?.password && this.#baseUrl
+      ? createOpencodeHttpClient(this.#baseUrl, { password: options.password })
+      : this.#client;
+
     try {
-      const response = await this.#client.config.providers<true>({});
+      const response = await client.config.providers<true>({});
       const modelsList: ModelsList = {
         object: "list",
         data: [],

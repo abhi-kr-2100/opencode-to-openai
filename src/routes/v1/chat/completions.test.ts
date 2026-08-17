@@ -7,6 +7,7 @@ import type {
 import { Router, type TimeoutConfigurableServer } from "../../../router.ts";
 import type {
   ChatCompletionsService,
+  ChatCompletionsServiceOptions,
   ChatCompletionResult,
 } from "../../../services/chat-completions.ts";
 import { chatCompletionsHandler } from "./completions.ts";
@@ -14,10 +15,18 @@ import { chatCompletionsHandler } from "./completions.ts";
 const stubServer: TimeoutConfigurableServer = { timeout: () => {} };
 
 class FakeChatCompletionsService implements ChatCompletionsService {
-  constructor(private readonly result: (request: ChatCompletionRequest) => ChatCompletionResult) {}
+  constructor(
+    private readonly result: (
+      request: ChatCompletionRequest,
+      options?: ChatCompletionsServiceOptions,
+    ) => ChatCompletionResult,
+  ) {}
 
-  async create(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
-    return this.result(request);
+  async create(
+    request: ChatCompletionRequest,
+    options?: ChatCompletionsServiceOptions,
+  ): Promise<ChatCompletionResult> {
+    return this.result(request, options);
   }
 }
 
@@ -158,5 +167,49 @@ describe("POST /v1/chat/completions", () => {
     const text = await response.text();
     expect(text).toContain("chat.completion.chunk");
     expect(text).toContain("data: [DONE]");
+  });
+
+  test("forwards Bearer token from authorization header as password option", async () => {
+    let capturedOptions: ChatCompletionsServiceOptions | undefined;
+    const completion: ChatCompletion = {
+      id: "chatcmpl-1",
+      object: "chat.completion",
+      created: 1,
+      model: "gpt-4o",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "hi" },
+          finish_reason: "stop",
+          logprobs: null,
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    };
+
+    const router = new Router();
+    router.register(
+      "POST",
+      "/v1/chat/completions",
+      chatCompletionsHandler(
+        new FakeChatCompletionsService((_req, options) => {
+          capturedOptions = options;
+          return { stream: false, value: completion };
+        }),
+      ),
+    );
+
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer my-secret-token",
+      },
+      body: JSON.stringify({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    const response = await router.handle(request, stubServer);
+    expect(response.status).toBe(200);
+    expect(capturedOptions).toEqual({ password: "my-secret-token" });
   });
 });

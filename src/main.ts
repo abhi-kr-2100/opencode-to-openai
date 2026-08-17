@@ -34,9 +34,13 @@ export async function start(options: StartOptions = {}): Promise<StartResult> {
   }
 
   try {
-    const opencodeClient = createOpencodeHttpClient(opencodeUrl);
-    const chatCompletions = new OpencodeChatCompletionsService(opencodeClient);
-    const models = new OpencodeModelsService(opencodeClient);
+    const opencodeClient = createOpencodeHttpClient(opencodeUrl, {
+      password: config.opencodePassword,
+    });
+    const chatCompletions = new OpencodeChatCompletionsService(opencodeClient, {
+      baseUrl: opencodeUrl,
+    });
+    const models = new OpencodeModelsService(opencodeClient, { baseUrl: opencodeUrl });
 
     const embeddings = new HuggingFaceEmbeddingsService(
       config.embeddingsModel,

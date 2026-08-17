@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { Router } from "../../router.ts";
 import type { EmbeddingsService } from "../../services/embeddings.ts";
-import type { ModelsService } from "../../services/models.ts";
+import type { ModelsService, ModelsServiceOptions } from "../../services/models.ts";
 import type { ModelsList } from "../../openai/models.ts";
 import { modelsHandler } from "./models.ts";
 
 class FakeModelsService implements ModelsService {
-  constructor(private readonly result: () => Promise<ModelsList> | ModelsList) {}
+  constructor(
+    private readonly result: (
+      options?: ModelsServiceOptions,
+    ) => Promise<ModelsList> | ModelsList,
+  ) {}
 
-  async list(): Promise<ModelsList> {
-    return this.result();
+  async list(options?: ModelsServiceOptions): Promise<ModelsList> {
+    return this.result(options);
   }
 }
 
@@ -119,5 +123,35 @@ describe("GET /v1/models", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(listResponse);
+  });
+
+  test("forwards Bearer token from authorization header as password option", async () => {
+    let capturedOptions: ModelsServiceOptions | undefined;
+    const listResponse: ModelsList = {
+      object: "list",
+      data: [
+        {
+          id: "anthropic/claude-3-5-sonnet-20241022",
+          object: "model",
+          created: 1700000000,
+          owned_by: "anthropic",
+        },
+      ],
+    };
+
+    const modelsService = new FakeModelsService((options) => {
+      capturedOptions = options;
+      return listResponse;
+    });
+
+    const response = await handle(
+      new Request("http://localhost/v1/models", {
+        headers: { authorization: "Bearer token123" },
+      }),
+      modelsService,
+    );
+
+    expect(response.status).toBe(200);
+    expect(capturedOptions).toEqual({ password: "token123" });
   });
 });
