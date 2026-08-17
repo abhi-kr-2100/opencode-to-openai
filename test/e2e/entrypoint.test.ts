@@ -17,11 +17,13 @@ describe("e2e entrypoint", () => {
   test(
     "boots src/main.ts and serves a completion from the real opencode server",
     async () => {
-      const proc = Bun.spawn([process.execPath, "src/main.ts"], {
-        env: { ...process.env, PORT: "0", OPENCODE_URL: opencode.url },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const proc = Bun.spawn(
+        [process.execPath, "src/main.ts", "--port", "0", "--opencode-url", opencode.url],
+        {
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
       try {
         const log = await readLogUntil(proc.stdout, /using opencode server at http:\/\//, 10_000);
         const match = /listening on http:\/\/([^:]+):(\d+)/.exec(log);

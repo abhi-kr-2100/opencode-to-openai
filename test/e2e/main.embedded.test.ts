@@ -3,38 +3,24 @@ import { describe, expect, test } from "bun:test";
 
 describe("src/main.ts", () => {
   test.serial(
-    "boot() embeds a real opencode server when OPENCODE_URL is unset and closes it on stop",
+    "boot() embeds a real opencode server when opencodeUrl is unset and closes it on stop",
     async () => {
-      const previousPort = process.env.PORT;
-      const previousHost = process.env.HOST;
-      const previousOpencodeUrl = process.env.OPENCODE_URL;
-      process.env.PORT = "0";
-      process.env.HOST = "127.0.0.1";
-      delete process.env.OPENCODE_URL;
-      try {
-        let embedded: { url: string; close(): void } | null = null;
-        const { boot } = await import("../../src/main.ts");
-        const result = await boot(true, {
-          createOpencodeServer: async (options: ServerOptions) => {
-            const real = await createOpencodeServer(options);
-            embedded = real;
-            return real;
-          },
-        });
-        expect(result).not.toBeNull();
-        expect(embedded).not.toBeNull();
-        const server = result!.server;
-        expect(server.port).toBeGreaterThan(0);
-        server.stop();
-        await expectConnectionClosed(embedded!.url);
-      } finally {
-        if (previousPort === undefined) delete process.env.PORT;
-        else process.env.PORT = previousPort;
-        if (previousHost === undefined) delete process.env.HOST;
-        else process.env.HOST = previousHost;
-        if (previousOpencodeUrl === undefined) delete process.env.OPENCODE_URL;
-        else process.env.OPENCODE_URL = previousOpencodeUrl;
-      }
+      let embedded: { url: string; close(): void } | null = null;
+      const { boot } = await import("../../src/main.ts");
+      const result = await boot(true, {
+        config: ["--port", "0", "--host", "127.0.0.1"],
+        createOpencodeServer: async (options: ServerOptions) => {
+          const real = await createOpencodeServer(options);
+          embedded = real;
+          return real;
+        },
+      });
+      expect(result).not.toBeNull();
+      expect(embedded).not.toBeNull();
+      const server = result!.server;
+      expect(server.port).toBeGreaterThan(0);
+      server.stop();
+      await expectConnectionClosed(embedded!.url);
     },
   );
 });
@@ -48,18 +34,12 @@ describe("src/main.ts cleanup", () => {
         port: 0,
         fetch: () => new Response("occupied"),
       });
-      const previousPort = process.env.PORT;
-      const previousHost = process.env.HOST;
-      const previousOpencodeUrl = process.env.OPENCODE_URL;
       let closeCalls = 0;
       try {
-        process.env.PORT = String(blocker.port);
-        process.env.HOST = "127.0.0.1";
-        delete process.env.OPENCODE_URL;
-
         const { start } = await import("../../src/main.ts");
         expect(
           start({
+            config: ["--port", String(blocker.port), "--host", "127.0.0.1"],
             createOpencodeServer: async () => ({
               url: "http://127.0.0.1:59999",
               close: () => {
@@ -71,12 +51,6 @@ describe("src/main.ts cleanup", () => {
         expect(closeCalls).toBe(1);
       } finally {
         blocker.stop();
-        if (previousPort === undefined) delete process.env.PORT;
-        else process.env.PORT = previousPort;
-        if (previousHost === undefined) delete process.env.HOST;
-        else process.env.HOST = previousHost;
-        if (previousOpencodeUrl === undefined) delete process.env.OPENCODE_URL;
-        else process.env.OPENCODE_URL = previousOpencodeUrl;
       }
     },
   );
