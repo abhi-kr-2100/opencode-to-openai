@@ -24,6 +24,7 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     const input = toPrompt(request.messages, {
       tools: request.tools,
       toolChoice: request.tool_choice,
+      responseFormat: request.response_format,
     });
 
     const tmpDir = await mkdtemp(join(tmpdir(), "opencode-to-openai-"));

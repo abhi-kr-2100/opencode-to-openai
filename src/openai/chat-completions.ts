@@ -59,10 +59,23 @@ export const chatCompletionRequestSchema = z.object({
   frequency_penalty: z.number().min(-2).max(2).optional(),
   seed: z.number().int().optional(),
   response_format: z
-    .object({
-      type: z.enum(["text", "json_object"]),
-      json_schema: jsonObjectSchema.optional(),
-    })
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("text"),
+      }),
+      z.object({
+        type: z.literal("json_object"),
+      }),
+      z.object({
+        type: z.literal("json_schema"),
+        json_schema: z.object({
+          name: z.string(),
+          description: z.string().optional(),
+          schema: jsonObjectSchema.optional(),
+          strict: z.boolean().nullish(),
+        }),
+      }),
+    ])
     .optional(),
   stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
   tools: z.array(toolSchema).optional(),

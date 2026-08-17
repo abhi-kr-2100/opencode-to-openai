@@ -4,6 +4,7 @@ import type {
   ChatCompletionMessage,
   ChatCompletionRequest,
 } from "../../openai/chat-completions.ts";
+import { renderFormatSection } from "./format.ts";
 import { isRecord, mimeFromUrl } from "./guards.ts";
 import { renderToolSection } from "./tools.ts";
 
@@ -63,6 +64,7 @@ export interface PromptInput {
 export interface PromptOptions {
   tools?: ChatCompletionRequest["tools"];
   toolChoice?: ChatCompletionRequest["tool_choice"];
+  responseFormat?: ChatCompletionRequest["response_format"];
 }
 
 /**
@@ -120,6 +122,9 @@ export function toPrompt(
     throw new BadRequestError("the last message must carry some content");
   }
   parts.push(...lastParts);
+
+  const formatSection = renderFormatSection(options.responseFormat);
+  if (formatSection !== undefined) system.push(formatSection);
 
   const toolSection = renderToolSection(options.tools, options.toolChoice);
   if (toolSection !== undefined) system.push(toolSection);
