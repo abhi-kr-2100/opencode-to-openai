@@ -5,6 +5,7 @@ const DEFAULTS = {
   host: "127.0.0.1",
   port: 8000,
   opencodeUrl: null,
+  opencodePassword: null,
   embeddingsModel: "Xenova/bge-small-en-v1.5",
   embeddingsPreload: false,
 };
@@ -25,6 +26,7 @@ describe("loadConfig", () => {
         PORT: "9000",
         HOST: "0.0.0.0",
         OPENCODE_URL: "http://opencode.example:7777",
+        OPENCODE_SERVER_PASSWORD: "secret-password",
         EMBEDDINGS_MODEL: "Xenova/all-MiniLM-L6-v2",
         EMBEDDINGS_PRELOAD: "true",
       }),
@@ -32,6 +34,7 @@ describe("loadConfig", () => {
       host: "0.0.0.0",
       port: 9000,
       opencodeUrl: "http://opencode.example:7777",
+      opencodePassword: "secret-password",
       embeddingsModel: "Xenova/all-MiniLM-L6-v2",
       embeddingsPreload: true,
     });
@@ -43,6 +46,7 @@ describe("loadConfig", () => {
         PORT: " 8123 ",
         HOST: " localhost ",
         OPENCODE_URL: " http://opencode.example:7777 ",
+        OPENCODE_SERVER_PASSWORD: " mypass ",
         EMBEDDINGS_MODEL: " Xenova/all-MiniLM-L6-v2 ",
         EMBEDDINGS_PRELOAD: " true ",
       }),
@@ -50,6 +54,7 @@ describe("loadConfig", () => {
       host: "localhost",
       port: 8123,
       opencodeUrl: "http://opencode.example:7777",
+      opencodePassword: "mypass",
       embeddingsModel: "Xenova/all-MiniLM-L6-v2",
       embeddingsPreload: true,
     });

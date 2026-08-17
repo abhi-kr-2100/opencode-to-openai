@@ -12,6 +12,7 @@ describe("createServer", () => {
         host: "127.0.0.1",
         port: 0,
         opencodeUrl: "http://localhost:4096",
+        opencodePassword: null,
         embeddingsModel: "Xenova/bge-small-en-v1.5",
         embeddingsPreload: false,
       },

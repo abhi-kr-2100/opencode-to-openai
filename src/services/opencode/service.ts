@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatCompletionRequest } from "../../openai/chat-completions.ts";
 import type { OpencodeClient } from "../../opencode/client.ts";
-import type { ChatCompletionResult, ChatCompletionsService } from "../chat-completions.ts";
+import { createOpencodeHttpClient } from "../../opencode/client.ts";
+import type {
+  ChatCompletionResult,
+  ChatCompletionsService,
+  ChatCompletionsServiceOptions,
+} from "../chat-completions.ts";
 import { buildChunks, buildCompletion } from "./completion.ts";
 import { mapOpencodeError, mapSessionError } from "./errors.ts";
 import { parseModel } from "./model.ts";
@@ -14,12 +19,20 @@ const AGENT = "scratch";
 
 export class OpencodeChatCompletionsService implements ChatCompletionsService {
   readonly #client: OpencodeClient;
+  readonly #baseUrl?: string;
 
-  constructor(client: OpencodeClient) {
+  constructor(client: OpencodeClient, options?: { baseUrl?: string }) {
     this.#client = client;
+    this.#baseUrl = options?.baseUrl;
   }
 
-  async create(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
+  async create(
+    request: ChatCompletionRequest,
+    options?: ChatCompletionsServiceOptions,
+  ): Promise<ChatCompletionResult> {
+    const client = options?.password && this.#baseUrl
+      ? createOpencodeHttpClient(this.#baseUrl, { password: options.password })
+      : this.#client;
     const model = parseModel(request.model);
     const input = toPrompt(request.messages, {
       tools: request.tools,
@@ -37,7 +50,7 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
 
       try {
         session = (
-          await this.#client.session.create<true>({
+          await client.session.create<true>({
             query: { directory: tmpDir },
           })
         ).data;
@@ -46,7 +59,7 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
       }
 
       try {
-        const result = await this.#client.session.prompt<true>({
+        const result = await client.session.prompt<true>({
           path: { id: session.id },
           body: { model, agent: AGENT, system: input.system, parts: input.parts },
         });
@@ -67,7 +80,7 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     } finally {
       await this.#cleanupTmpDir(tmpDir);
       if (session) {
-        await this.#deleteSession(session.id);
+        await this.#deleteSession(client, session.id);
       }
     }
   }
@@ -91,9 +104,9 @@ export class OpencodeChatCompletionsService implements ChatCompletionsService {
     await writeFile(join(agentsDir, "scratch.md"), `---\n${frontmatter}\n---\n.\n`);
   }
 
-  async #deleteSession(sessionID: string): Promise<void> {
+  async #deleteSession(client: OpencodeClient, sessionID: string): Promise<void> {
     try {
-      await this.#client.session.delete<true>({ path: { id: sessionID } });
+      await client.session.delete<true>({ path: { id: sessionID } });
     } catch {
       // Best effort cleanup; the session may already be gone.
     }

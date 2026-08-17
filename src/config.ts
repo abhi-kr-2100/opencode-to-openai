@@ -5,6 +5,7 @@ export interface Config {
   host: string;
   port: number;
   opencodeUrl: string | null;
+  opencodePassword: string | null;
   embeddingsModel: string;
   embeddingsPreload: boolean;
 }
@@ -21,6 +22,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (opencodeUrl && !parseHttpUrl(opencodeUrl)) {
     throw new Error(`invalid OPENCODE_URL "${opencodeUrl}": expected an absolute http(s) URL`);
   }
+  const opencodePassword = env.OPENCODE_SERVER_PASSWORD?.trim() || null;
   const embeddingsModel = env.EMBEDDINGS_MODEL?.trim() || DEFAULT_EMBEDDINGS_MODEL;
   const rawPreload = env.EMBEDDINGS_PRELOAD?.trim();
   const parsedPreload = rawPreload === undefined ? false : parseBoolean(rawPreload);
@@ -35,6 +37,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     host: env.HOST?.trim() || "127.0.0.1",
     port,
     opencodeUrl,
+    opencodePassword,
     embeddingsModel,
     embeddingsPreload,
   };
